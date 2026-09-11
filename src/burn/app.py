@@ -35,8 +35,7 @@ async def monitor(console: Console, view: View) -> None:
     """Redraw on a timer or after a keypress."""
     tailer = Tailer()
     async with keyboard() as pressed:
-        # Sample before entering the alternate screen. This prevents an empty
-        # first frame. Keys pressed during sampling remain queued.
+        # Sample before the alternate screen so the first frame isn't empty.
         snapshot = await tailer.sample(view.window)
         with Live(console=console, screen=True, auto_refresh=False) as live:
             sampling: asyncio.Task[Snapshot] | None = None
@@ -73,14 +72,10 @@ async def monitor(console: Console, view: View) -> None:
                         if updated is None:
                             return
                         if updated.window != view.window:
-                            # Read older files for a wider window. A `due`
-                            # deadline can't carry this alone: if the old
-                            # window's sample is still in flight, its
-                            # completion resets `due` to the next ordinary
-                            # tick and would silently swallow the request.
-                            # This flag survives that reset and forces the
-                            # resample on the first iteration where a sample
-                            # isn't already running.
+                            # A widen needs older files. `due` alone can't
+                            # carry this: an in-flight sample's completion
+                            # resets it before the new window is read. This
+                            # flag survives that reset.
                             resample_now = True
                         view = updated
             finally:
@@ -100,10 +95,7 @@ async def keyboard() -> AsyncIterator[asyncio.Queue[str]]:
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     loop = asyncio.get_running_loop()
-    # A multi-byte UTF-8 character (pasted text, a non-ASCII filter query) can
-    # arrive split across two reads. An incremental decoder holds the partial
-    # tail back until the rest lands, instead of decoding each read in
-    # isolation and turning the split-off bytes into "replace" mojibake.
+    # Holds a multi-byte UTF-8 char across reads instead of mojibaking it.
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
     def readable() -> None:

@@ -9,8 +9,7 @@ from itertools import pairwise
 
 __all__ = ["Call", "Gauge", "Row", "Snapshot", "Tooling", "Usage"]
 
-# Weights are relative to one input token.
-# Raw sums overstate cost because cache reads are cheaper.
+# Weights are relative to one input token; raw sums overstate cost.
 CACHE_WRITE_WEIGHT = 1.25
 CACHE_READ_WEIGHT = 0.1
 OUTPUT_WEIGHT = 5.0
@@ -40,7 +39,6 @@ class Usage:
 
     @property
     def weight(self) -> float:
-        """Usage converted to input-token equivalents."""
         return (
             self.input
             + CACHE_WRITE_WEIGHT * self.cache_write
@@ -152,14 +150,7 @@ class Row:
 
     @property
     def key(self) -> str:
-        """Identify this row across renders.
-
-        The session id alone is not unique: a session that moved between
-        project directories (a ``cd`` mid-conversation) tabulates into one
-        row per project, all sharing the same session id. Selection must
-        key on the full grouping, or the cursor can lock onto a row it can
-        never distinguish from its neighbour.
-        """
+        """Row key: session id alone collides across a session's projects."""
         return f"{self.source}|{self.session}|{self.project}"
 
 
@@ -169,11 +160,7 @@ def compactions(calls: Iterable[Call]) -> int:
 
 
 def threads(calls: Iterable[Call]) -> list[list[Call]]:
-    """Split interleaved calls into separately growing conversations.
-
-    Assign each call to the open thread with the closest lower prefix. Start a
-    new thread when no open thread can contain the call.
-    """
+    """Split interleaved calls into separately growing conversations."""
     open_: list[list[Call]] = []
     for call in calls:
         fits = [t for t in open_ if t[-1].prefix <= call.prefix]

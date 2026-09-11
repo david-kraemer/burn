@@ -74,10 +74,10 @@ def test_the_loop_survives_a_key_arriving_before_the_first_sample(scripted):
 
 
 def test_a_sample_in_flight_does_not_block_the_quit_key(monkeypatch):
-    """Only the opening sample is awaited; after that a key always wins.
+    """Only the opening sample blocks. After that, a key always wins.
 
-    The first one runs before the alternate screen is entered, so the opening
-    frame has data in it. Every later sample overlaps the keyboard.
+    The first sample runs before the app enters the alternate screen, so the
+    opening frame has data in it. Every later sample overlaps the keyboard.
     """
     from burn import app
     from burn.model import Snapshot

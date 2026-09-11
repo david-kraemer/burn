@@ -1,8 +1,4 @@
-"""Render the drill-down views.
-
-Each view is a pure function of a snapshot. Tests can render views without a
-terminal. The live dashboard reuses two views in its detail pane.
-"""
+"""Render the drill-down views: each is a pure function of a snapshot."""
 
 from __future__ import annotations
 
@@ -73,8 +69,8 @@ def turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
     )
     table.add_column("PROMPT", width=38, no_wrap=True)
 
-    # "Most expensive" means dollars, not raw tokens: a heavily-used cheap
-    # model can outweigh a pricier one in tokens while costing less.
+    # "Most expensive" is dollars, not tokens: a heavily-used cheap model
+    # can outweigh a pricier one in tokens while costing less.
     ranked = sorted(grouped.items(), key=lambda kv: -sum(analysis.dollars(c) for c in kv[1]))
     for (session, prompt), items in ranked[:top]:
         cost = sum(analysis.dollars(c) for c in items)
@@ -228,11 +224,7 @@ def audit(threshold: float = 15.0) -> RenderableType:
 
     table = columns([("SESSION", 12)], [("OBSERVED", 9), ("BILLED", 9), ("UNSEEN", 7)])
     table.add_column("LIKELY CAUSE", width=24, no_wrap=True)
-    # `unseen` runs both ways: positive means burn saw fewer tokens than
-    # Claude billed (fan-out, background calls); negative means burn saw
-    # *more* than was billed, which points at burn's own weighting, not a
-    # missing-call explanation. Rank and filter by magnitude so a large
-    # discrepancy in either direction gets surfaced, not just shortfalls.
+    # unseen > 0: burn saw fewer tokens than billed. < 0: burn overcounts.
     for entry in sorted(found, key=lambda r: -abs(r.unseen)):
         if abs(entry.unseen) < threshold:
             continue

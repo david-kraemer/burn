@@ -125,12 +125,7 @@ class Growth:
 
 
 def attribution(calls: Iterable[Call], tooling: Iterable[Tooling]) -> list[Blame]:
-    """Assign context growth and later read cost to its tools.
-
-    Growth is the increase between calls, less the assistant's output. Split
-    it among intervening tools by result size. Charge each tool for later
-    reads of its cached result.
-    """
+    """Assign context growth (calls minus output) and its later read cost to intervening tools."""
     events = sessions_of(tooling)
     totals: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])
 
@@ -152,32 +147,21 @@ def attribution(calls: Iterable[Call], tooling: Iterable[Tooling]) -> list[Blame
 def growths(items: Sequence[Call]) -> Iterator[Growth]:
     """Every positive growth step across a session's threads.
 
-    A session that ran concurrent threads (a compaction, or Codex's side
-    threads under one session id) has threads whose spans overlap in wall
-    time. Each step is kept as its own interval so a tool result can be
-    matched to the one thread it actually happened in, not to every thread
-    whose span happens to contain that moment.
+    Threads can overlap in wall time (a compaction, or Codex's side threads
+    under one session id), so each step is its own interval: a tool result
+    is matched to the thread it actually ran in, not every overlapping one.
     """
     for strand in threads(items):
         for index, (previous, call) in enumerate(pairwise(strand)):
-            # The result is cached once and read by later calls in this
-            # thread. A compaction starts a new thread.
+            # Cached once, read by each later call in this thread.
             carry = CACHE_WRITE_WEIGHT + CACHE_READ_WEIGHT * max(len(strand) - index - 2, 0)
-            # Growth is new context, less the model's output.
             growth = call.prefix - previous.prefix - previous.usage.output
             if growth > 0:
                 yield Growth(previous.at, call.at, growth, carry, call.model)
 
 
 def assign(steps: Sequence[Growth], series: Sequence[Tooling]) -> list[list[Tooling]]:
-    """Match each tool result to the narrowest step whose span contains it.
-
-    Overlapping threads can have several steps whose ``(start, end]`` spans
-    all contain one tool result's timestamp; crediting it to every one of
-    them would multiply-count both its context and its dollar cost. The
-    narrowest containing span is the thread that was actually running when
-    the tool returned, so only it gets the credit.
-    """
+    """Credit each tool result to the narrowest containing step, not every overlapping one."""
     between: list[list[Tooling]] = [[] for _ in steps]
     for event in series:
         best = None
@@ -228,7 +212,6 @@ class Waste:
 
     @property
     def premium(self) -> float:
-        """Weighted tokens caused by an expired cache."""
         return self.idle_tokens * IDLE_PREMIUM
 
 
@@ -276,27 +259,13 @@ def projected(spent: float, elapsed: float, remaining: float) -> float:
 
 
 def rates() -> Mapping[str, tuple[float, int]]:
-    """Calculate dollars per weighted megatoken for each model.
-
-    Use closed Claude sessions whose observed and billed totals match.
-    Exclude sessions with unrecorded subagent traffic.
-    """
+    """Dollars per weighted megatoken per model, from closed sessions with no subagent traffic."""
     return _rates_within(int(time.time() // RATES_TTL))
 
 
 @cache
 def _rates_within(epoch: int) -> Mapping[str, tuple[float, int]]:
-    """Solve rates, memoised for one ``RATES_TTL``-wide slice of time.
-
-    ``rates`` is called once per rendered call in a long-lived live
-    dashboard, so the result has to stay memoised in-process. But keying
-    the cache on nothing (as a bare ``@cache`` would) freezes the answer for
-    the process's entire lifetime, defeating ``RATES_CACHE``'s whole point:
-    a dashboard left running for a day never sees an on-disk cache refreshed
-    by another ``burn`` invocation, or a rate solved from newly-closed
-    sessions. Bucketing the cache key by TTL-sized epoch makes it expire on
-    schedule even though it never receives an explicit clear.
-    """
+    """Solve rates, memoised per TTL-wide epoch so a live dashboard still sees cache refreshes."""
     if (cached := cached_rates()) is not None:
         return cached
     pools: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
@@ -324,13 +293,7 @@ def dollars(call: Call) -> float:
 
 
 def blended_rate() -> float:
-    """Return one average rate for totals spanning models.
-
-    Weighted by each model's reconciled session count, not a flat average
-    of per-model rates: an unweighted average lets one rarely-used model
-    (say a cheap Haiku sample or two) drag the "blended" estimate away from
-    what a workload dominated by a pricier model actually costs.
-    """
+    """One rate spanning models, weighted by sample count, not a flat per-model average."""
     solved = list(rates().values())
     samples = sum(n for _, n in solved)
     if not samples:
@@ -416,15 +379,7 @@ def reconcile(path: Path) -> tuple[float, float, bool]:
 
 
 def billed_models(path: Path) -> Iterator[tuple[str, float, float]]:
-    """Return per-model tokens and dollars from the final cost-state record.
-
-    A session file can carry several ``cost-state`` checkpoints as its
-    cumulative total is rewritten over time; only the last one reflects the
-    session's true billed total. ``reconcile`` already treats it this way
-    (each new checkpoint replaces ``billed`` rather than adding to it), and
-    this must agree or the rate solver double-counts every checkpointed
-    session's tokens and dollars.
-    """
+    """Per-model tokens/dollars from the final cost-state record; checkpoints replace, not add."""
     final = None
     for record in records(path):
         if record.get("type") == "cost-state":

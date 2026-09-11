@@ -1,16 +1,8 @@
 """Interactive state and table rows.
 
-:class:`View` is frozen. A keypress produces a new view; it never mutates
-one. So the whole interactive surface is a function from (key, view) to
-view, and a test can check it one keystroke at a time.
-
-The selection is a row key, not a row index. Sorting, filtering, and
-the window all reorder or shorten the table under the cursor. Naming the
-selection by key keeps it on the same row instead of sliding onto a
-neighbour. Nothing ever needs clamping back into range. The key is more
-than the session id: a session that moved between project directories
-tabulates into one row per project, and the session id alone would not
-tell those rows apart.
+:class:`View` is frozen; a keypress produces a new one. Selection is keyed
+by row key, not index, so sorting/filtering/window changes never need to
+clamp or slide the cursor onto a neighbouring row.
 """
 
 from __future__ import annotations

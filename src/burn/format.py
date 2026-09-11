@@ -15,10 +15,7 @@ def quantity(value: float) -> str:
     for index, (limit, suffix) in enumerate(tiers):
         if abs(value) >= limit:
             scaled = round(value / limit, 1)
-            # Rounding a value like 999,999 can push it to "1000.0" in its own
-            # tier (here "k") instead of over to "1.0M": re-scale into the
-            # next tier up so the three-significant-figure contract holds
-            # right at every unit boundary.
+            # 999,999 can round to "1000.0" in its own tier; re-scale up.
             if abs(scaled) >= 1000 and index > 0:
                 limit, suffix = tiers[index - 1]
                 scaled = value / limit
@@ -71,18 +68,7 @@ def trim(text: str, width: int) -> str:
 
 
 def short(identifier: str) -> str:
-    """Shorten a session ID while retaining its useful prefix.
-
-    This is a grouping key throughout burn (attribution, cache waste,
-    table rows), not only a display string, so it needs real collision
-    resistance, not just brevity. Session ids are UUIDs; an 8-character
-    prefix carries only the first ~32 bits of a UUID4's randomness, and by
-    the birthday bound a busy user accumulating tens of thousands of
-    sessions has a genuine chance of two colliding onto the same short id
-    and silently merging into one row. 12 characters pushes that point out
-    past any realistic session count; the table column truncates further
-    for display regardless (see dashboard.sessions' fixed-width column).
-    """
+    """Shorten a session ID; it's a grouping key, so keep 12 chars for collision resistance."""
     return identifier[:12]
 
 
@@ -107,9 +93,7 @@ def resample(series: list[float], width: int) -> list[float]:
     if width <= 0 or len(series) <= width:
         return series
     step = len(series) / width
-    # The last edge is `len(series)`, not `round(width * step)`: float drift
-    # in that product can round down by one, silently dropping the series'
-    # final (often most significant, e.g. most recent) point from every
-    # bucket.
+    # Last edge is len(series), not round(width * step), to avoid dropping
+    # the series' final point to float drift.
     edges = [round(i * step) for i in range(width)] + [len(series)]
     return [sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1) for lo, hi in pairwise(edges)]

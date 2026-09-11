@@ -3,8 +3,8 @@
 `burn` is a terminal user interface (TUI) for monitoring token use in Claude
 Code and Codex.
 
-It reads the JSONL transcript files that these tools already write. It does
-not instrument either tool.
+It reads the JSONL transcript files these tools write. It does not
+instrument either tool.
 
 ## Install
 
@@ -88,8 +88,8 @@ burn --once
 | Claude Code | `~/.claude/projects/*/*.jsonl` | `assistant` records and `message.usage` |
 | Codex | `~/.codex/sessions/Y/M/D/rollout-*.jsonl` | `event_msg` records and `token_count` |
 
-The program normalizes both formats into one call record. It reads new data on
-each refresh and keeps track of the last byte read from each transcript.
+The program normalizes both formats into one call record. It reads new data
+on each refresh and tracks the last byte read from each transcript.
 
 Claude Code can write several records for one API call. `burn` merges records
 with the same message and request identifiers so that it does not count the
@@ -107,7 +107,7 @@ It applies these relative weights:
 | Cache read | 0.1 |
 | Output | 5.0 |
 
-This measure reflects the relative token prices used by the tool. It is not a
+This measure reflects the tool's relative token prices. It is not a
 provider invoice.
 
 `burn tools` reports two related values:
@@ -117,9 +117,9 @@ provider invoice.
 
 ## Cost estimates
 
-Claude Code records cost data when a session closes. `burn cost` uses sessions
-whose observed tokens reconcile with that data to calculate an effective rate
-for each model.
+Claude Code records cost data when a session closes. `burn cost` uses
+sessions whose observed tokens reconcile with that data to calculate an
+effective rate for each model.
 
 Codex transcript records contain token counts but no cost. `burn` therefore
 does not report a Codex dollar amount.
@@ -137,10 +137,10 @@ percentages recorded by Codex.
 
 The transcript is not a complete billing record.
 
-Claude Code can bill subagent and background work that does not appear in its
-main transcript. `burn verify` shows the difference between observed and
-Claude's recorded totals. Sessions that use `Task`, `Agent`, or `Workflow`
-may have a larger difference.
+Claude Code can bill subagent and background work absent from its main
+transcript. `burn verify` shows the difference between observed and Claude's
+recorded totals. Sessions using `Task`, `Agent`, or `Workflow` can show a
+larger difference.
 
 Codex token totals are read from its `token_count` records. The tool does not
 infer costs that Codex does not record.

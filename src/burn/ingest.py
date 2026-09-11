@@ -64,23 +64,14 @@ class Tailer:
         self._gauges_at = ""
 
     async def sample(self, window: int) -> Snapshot:
-        """Read new records and return the current snapshot.
-
-        File scans and parsing run in a worker thread so the live view can
-        continue to accept input.
-        """
+        """Read new records and return the current snapshot; parsing runs off-thread."""
         now = time.time()
         horizon = now - (max(window, 300) + 60) * 60
         for path, offset, fragment in await asyncio.to_thread(self._read, horizon):
             self._offsets[path] = offset
             self._absorb(fragment)
-        # Retain double the visible window: a file already being tailed only
-        # ever grows by new appended lines, so once its earlier content is
-        # forgotten here it can never be re-read from disk (the byte offset
-        # has already moved past it). The "+"/"-" keys double or halve the
-        # window one step at a time, so keeping 2x means a single widen
-        # always finds its data already retained, matching what "a wider
-        # view can reuse them" promises.
+        # Retain double the window: a widen ("+") must still find data whose
+        # byte offset has already advanced past it.
         self._forget(now - max(window, 300) * 60 * 2)
         return Snapshot(
             at=now,
@@ -90,15 +81,12 @@ class Tailer:
         )
 
     def _read(self, horizon: float) -> list[tuple[Path, int, Fragment]]:
-        """Read files in a worker thread."""
         found = []
         for path, source in transcripts(horizon):
             stored = self._offsets.get(path, 0)
             if rewritten(path, stored):
-                # tail() is about to restart this file from byte zero. Its
-                # Carry (pending tool ids, current prompt/model/project) was
-                # built from the file's old content and must not bleed into
-                # the new content read from the start.
+                # tail() restarts from byte zero; drop the stale Carry so it
+                # doesn't bleed into content read from the start.
                 self._carry.pop(path, None)
             lines, offset = tail(path, stored)
             if lines:
@@ -217,14 +205,9 @@ def read_codex(records: Iterable[dict], carry: Carry) -> Fragment:
         at = moment(record.get("timestamp")) or 0.0
         match record.get("type"):
             case "session_meta":
-                # Not `carry.session = short(payload.get("session_id") or ...)`:
-                # a sub-agent's own rollout file reports its *parent's*
-                # thread id here, not its own, which would silently fold
-                # the sub-agent's calls into the parent session's row and
-                # corrupt attribution (threads() would splice an unrelated
-                # prefix sequence into the parent's). `_carry_for` already
-                # seeded `carry.session` from this file's own filename,
-                # which is unique per file regardless of parent/child.
+                # Ignore session_id here: a sub-agent's rollout file reports
+                # its *parent's* thread id, which would corrupt attribution.
+                # _carry_for already seeded carry.session from the filename.
                 carry.project = Path(payload.get("cwd") or carry.project).name
             case "turn_context":
                 carry.model = payload.get("model") or carry.model
@@ -356,11 +339,8 @@ def tail(path: Path, offset: int) -> tuple[list[str], int]:
     end = blob.rfind(b"\n")
     if end < 0:  # Wait for the rest of a partial line.
         return [], offset
-    # JSONL uses "\n" as its sole record separator. str.splitlines() also
-    # breaks on \r, \v, \f, U+2028, U+2029 and NEL -- all legal *unescaped*
-    # inside a JSON string -- so a prompt or tool output containing one of
-    # those would be split into two fragments, each invalid JSON, and the
-    # whole record silently dropped by decode()'s parse-error handling.
+    # Split on "\n" only: str.splitlines() also breaks on other separators
+    # legal inside a JSON string, which would corrupt a record containing one.
     return blob[:end].decode("utf-8", "replace").split("\n"), offset + end + 1
 
 

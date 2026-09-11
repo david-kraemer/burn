@@ -7,7 +7,7 @@ from burn.model import Call, Snapshot, Tooling, Usage
 
 @pytest.fixture
 def call():
-    """A Call factory with everything but the interesting field defaulted."""
+    """A Call factory. Every field defaults except the one under test."""
 
     def make(at=0.0, session="s1", *, source="cc", project="p", model="claude-opus-5",
              usage=None, **kwargs):
@@ -35,7 +35,7 @@ def tool():
 
 @pytest.fixture
 def jsonl():
-    """Render records as the transcript lines a parser is handed."""
+    """Render records as the transcript lines a parser reads."""
     return lambda *records: [json.dumps(r) for r in records]
 
 

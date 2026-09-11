@@ -1,9 +1,4 @@
-"""Map keypresses to view state.
-
-``apply`` is total and pure. It never touches the terminal. It never
-reads the disk. It returns ``None`` only to mean quit. That is what lets
-a test exercise the whole interactive surface as a list of keystrokes.
-"""
+"""Map keypresses to view state. ``apply`` is total, pure, and returns None only to mean quit."""
 
 from __future__ import annotations
 

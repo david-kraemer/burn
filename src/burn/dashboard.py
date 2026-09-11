@@ -1,9 +1,4 @@
-"""Render the live screen from a snapshot and view state.
-
-Nothing here mutates either argument. Given the same pair, every line but
-the masthead's live wall clock renders identically, so a regression still
-shows up as a string comparison over everything else in the frame.
-"""
+"""Render the live screen from a snapshot and view state; neither is mutated."""
 
 from __future__ import annotations
 
@@ -100,13 +95,11 @@ def claude_meter(snapshot: Snapshot, view: View) -> Text:
     elapsed = snapshot.at - start
     left = max(BLOCK - elapsed, 0.0)
     if view.limit:
-        # The bar tracks tokens spent against the allowance.
         fraction, style = spent / view.limit, "cyan"
         tail = f"{quantity(spent)}/{quantity(view.limit)}"
     else:
-        # No allowance to measure against, so the bar can only track time
-        # elapsed through the block, not tokens. Dim it and say so: a
-        # filled bar otherwise reads as a quota meter it isn't.
+        # No allowance set: track elapsed time, not tokens, and dim it so
+        # it doesn't read as a real quota meter.
         fraction, style = elapsed / BLOCK, "dim"
         tail = f"{quantity(spent)} spent, no --limit set"
     return Text.assemble(
@@ -212,12 +205,8 @@ def zoom(snapshot: Snapshot, view: View, table: list[Row], at: int) -> Renderabl
     if not picked.calls:
         return Text(f"  {chosen}: no calls in this window", style="dim")
     detail = views.turns(picked, 6) if view.panel != TOOLS else views.tools(picked, 6)
-    # The pane is keyed by session, not by Row.key: a session that moved
-    # between project directories tabulates into one row per project (see
-    # Row.key), but attribution needs the whole, unbroken call sequence to
-    # get cache-carry math right, so it's pulled in regardless of which of
-    # those rows the user actually selected. Say so, or the projects named
-    # here can look like the wrong session was opened.
+    # Keyed by session, not Row.key: attribution needs the whole call
+    # sequence, spanning every project row the session tabulated into.
     projects = {c.project for c in picked.calls}
     if len(projects) > 1:
         note = Text(f"  spans projects: {', '.join(sorted(projects))}", style="yellow")

@@ -26,13 +26,7 @@ def bar(percent: float, width: int = 8) -> str:
 
 
 def clamp(value: float, width: int) -> int:
-    """Round a fill amount into ``[0, width]``, treating NaN/inf as empty.
-
-    Upstream data (a malformed rate-limit event, a corrupted transcript
-    record) can hand a bar a non-finite fraction. `round()` raises on NaN
-    and infinity, which would crash the whole live redraw loop over one bad
-    value rather than just drawing an empty bar for it.
-    """
+    """Round a fill amount into [0, width]; non-finite input draws empty (round() would raise)."""
     if not math.isfinite(value):
         return 0
     return max(0, min(width, round(value)))

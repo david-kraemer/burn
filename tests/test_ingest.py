@@ -47,8 +47,8 @@ def test_claude_merges_the_records_of_one_call():
 
 
 def test_claude_registers_tool_use_from_a_record_with_no_usage_of_its_own():
-    # The later content-block records carry the tool_use blocks but no usage;
-    # dropping them loses every tool result that follows.
+    # The later content-block records carry the tool_use blocks but no usage.
+    # Dropping them loses every tool result that follows.
     carry = Carry()
     read_claude(
         [
@@ -117,7 +117,7 @@ def test_codex_call_inherits_model_and_project_from_earlier_headers():
     )
     (_, call), = fragment.calls
     assert (call.model, call.project, call.source) == ("gpt-5.6-luna", "spade", CODEX)
-    # Codex reports cached tokens inside the input count; burn splits them out.
+    # Codex reports cached tokens inside the input count. Burn splits them out.
     assert (call.usage.input, call.usage.cache_read) == (10, 90)
 
 
