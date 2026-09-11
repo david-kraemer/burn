@@ -16,14 +16,6 @@ uv tool install --editable .
 
 Use `--editable` while developing `burn`. Omit it to install a snapshot.
 
-The repository also supports a standalone run:
-
-```sh
-uv run burn.py
-```
-
-This command installs the script dependencies in an isolated environment.
-
 ## Use
 
 Run `burn` without a subcommand to open the live monitor.
