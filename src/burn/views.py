@@ -1,8 +1,7 @@
-"""The drill-down views.
+"""Render the drill-down views.
 
-Each is a pure function of a snapshot, so each can be rendered to a string in a
-test without a terminal, and the live dashboard reuses two of them verbatim as
-its zoom pane.
+Each view is a pure function of a snapshot. Tests can render views without a
+terminal. The live dashboard reuses two views in its detail pane.
 """
 
 from __future__ import annotations
@@ -13,14 +12,14 @@ from datetime import UTC, datetime
 from rich.console import Group, RenderableType
 from rich.text import Text
 
-from burn import analysis
-from burn.format import label, quantity, resample, span, sparkline, tint, trim
-from burn.model import CACHE_TTL, Call, Snapshot, Usage, compactions
-from burn.widgets import bar, columns, grid
+from . import analysis
+from .format import label, quantity, resample, span, sparkline, tint, trim
+from .model import CACHE_TTL, Call, Snapshot, Usage, compactions
+from .widgets import bar, columns, grid
 
 
 def tools(snapshot: Snapshot, top: int = 15) -> RenderableType:
-    """What is actually inflating the context, tool by tool."""
+    """Show context growth by tool."""
     blamed = analysis.attribution(snapshot.calls, snapshot.tools)
     if not blamed:
         return Text("No attributable context growth in this window.", style="dim")
@@ -53,14 +52,14 @@ def tools(snapshot: Snapshot, top: int = 15) -> RenderableType:
         table,
         Text(""),
         Text(
-            "ADDED is what the tool injected; CARRIED is that re-read by every later call.",
+            "ADDED is context added by the tool. CARRIED is its later re-read cost.",
             style="dim",
         ),
     )
 
 
 def turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
-    """The most expensive prompts, so the costly asks are identifiable."""
+    """Show the most expensive prompts."""
     grouped: dict[tuple[str, str], list[Call]] = defaultdict(list)
     for call in snapshot.calls:
         if call.prompt:
@@ -88,7 +87,7 @@ def turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
 
 
 def session(snapshot: Snapshot, target: str | None) -> RenderableType:
-    """One session end to end: context curve, cache behaviour, tool mix."""
+    """Show context, cache use, and tools for one session."""
     if not target:
         return Text("Usage: burn session <session-id-prefix>", style="dim")
     items = [c for c in snapshot.calls if c.session.startswith(target)]
@@ -138,7 +137,7 @@ def session(snapshot: Snapshot, target: str | None) -> RenderableType:
 
 
 def cost(snapshot: Snapshot, window: int) -> RenderableType:
-    """Spend by model and project, at rates calibrated from your own billing."""
+    """Show estimated spend by model and project."""
     table = columns([("MODEL", 26)], [("$/WEIGHTED Mtok", 16), ("SAMPLES", 8)])
     for model, (rate, samples) in sorted(analysis.rates().items()):
         table.add_row(label(model), f"{rate:.2f}", str(samples))
@@ -158,9 +157,9 @@ def cost(snapshot: Snapshot, window: int) -> RenderableType:
     return Group(
         Text("Effective rates", style="bold"),
         Text(
-            "Solved from Claude's own cost-state records: dollars billed over weighted\n"
-            "tokens observed, using only sessions whose tokens reconcile. Codex records\n"
-            "no cost at all, so its rows below show tokens only.",
+            "Rates use Claude cost-state records and observed weighted tokens.\n"
+            "Only sessions with matching totals are used. Codex records no cost;\n"
+            "its rows show tokens only.",
             style="dim",
         ),
         Text(""),
@@ -173,12 +172,7 @@ def cost(snapshot: Snapshot, window: int) -> RenderableType:
 
 
 def waste(snapshot: Snapshot) -> RenderableType:
-    """Cache re-creation: the same prefix, paid for again at 12.5x the read price.
-
-    The short cache tier expires after five minutes. Step away for longer and
-    the next call re-creates the whole prefix, which is why an idle session can
-    cost more than a busy one.
-    """
+    """Show cache tokens recreated after idle periods."""
     summary = analysis.waste(snapshot.calls, CACHE_TTL)
     if not summary.total:
         return Text("No cache re-creation in this window.", style="dim")
@@ -216,15 +210,15 @@ def waste(snapshot: Snapshot) -> RenderableType:
         tiers,
         Text(""),
         Text(
-            "Sessions leaning on the 5m tier pay this every time you step away; the 1h "
-            "tier costs more to write but survives the gap.",
+            "The 5m tier is recreated after each long idle period. The 1h tier "
+            "costs more to write but lasts longer.",
             style="dim",
         ),
     )
 
 
 def audit(threshold: float = 15.0) -> RenderableType:
-    """Compare observed tokens with the totals Claude Code computed itself."""
+    """Compare observed tokens with Claude's billed totals."""
     found = analysis.audit()
     if not found:
         return Text("No closed sessions with cost-state records yet.", style="dim")

@@ -9,7 +9,7 @@ SPARK = "▁▂▃▄▅▆▇█"
 
 
 def quantity(value: float) -> str:
-    """A token count at three significant figures: 1.2M, 940k, 37."""
+    """Format a token count with three significant figures."""
     for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
         if abs(value) >= limit:
             return f"{value / limit:.1f}{suffix}"
@@ -17,7 +17,7 @@ def quantity(value: float) -> str:
 
 
 def span(seconds: float) -> str:
-    """A duration as 2d04h, 4h17m, 9m or 30s."""
+    """Format a duration as days, hours, minutes, or seconds."""
     minutes = int(max(seconds, 0) // 60)
     days, rest = divmod(minutes, 1440)
     hours, mins = divmod(rest, 60)
@@ -29,12 +29,12 @@ def span(seconds: float) -> str:
 
 
 def clock(epoch: float | None) -> str:
-    """A unix timestamp as local wall-clock time."""
+    """Format a Unix timestamp in local time."""
     return f"{datetime.fromtimestamp(epoch, UTC).astimezone():%H:%M}" if epoch else "?"
 
 
 def moment(text: str | None) -> float | None:
-    """An ISO-8601 timestamp as unix seconds, or None if unparseable."""
+    """Parse an ISO 8601 timestamp, or return None."""
     if not text:
         return None
     try:
@@ -44,29 +44,29 @@ def moment(text: str | None) -> float | None:
 
 
 def label(model: str) -> str:
-    """Model name minus the vendor prefix and build date nobody reads."""
+    """Remove the vendor prefix and build date from a model name."""
     for prefix in ("claude-", "gpt-"):
         model = model.removeprefix(prefix)
     return re.sub(r"-\d{8}$", "", model)
 
 
 def trim(text: str, width: int) -> str:
-    """Text clipped to width, with an ellipsis where it was cut."""
+    """Clip text to ``width`` and add an ellipsis when needed."""
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
 def short(identifier: str) -> str:
-    """A session id at the length that still distinguishes them."""
+    """Shorten a session ID while retaining its useful prefix."""
     return identifier[:8]
 
 
 def tint(percent: float) -> str:
-    """Green below 60, yellow to 85, red above: the usual traffic light."""
+    """Return green, yellow, or red for a percentage."""
     return "red" if percent >= 85 else "yellow" if percent >= 60 else "green"
 
 
 def sparkline(series: list[float], ceiling: float, floor: float = 0.0) -> str:
-    """A series as block characters, scaled between floor and ceiling."""
+    """Render a scaled series as block characters."""
     if ceiling <= floor:
         return "·" * len(series)
     reach = ceiling - floor
@@ -77,10 +77,9 @@ def sparkline(series: list[float], ceiling: float, floor: float = 0.0) -> str:
 
 
 def resample(series: list[float], width: int) -> list[float]:
-    """A series squeezed to at most ``width`` points by averaging each bucket."""
+    """Reduce a series to at most ``width`` points by averaging buckets."""
     if width <= 0 or len(series) <= width:
         return series
     step = len(series) / width
     buckets = ((int(i * step), int((i + 1) * step)) for i in range(width))
     return [sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1) for lo, hi in buckets]
-

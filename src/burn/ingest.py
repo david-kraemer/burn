@@ -1,12 +1,4 @@
-"""Reading the two transcript trees.
-
-Both agents append JSONL to disk as they work, so nothing needs instrumenting.
-Together those trees run to hundreds of megabytes, which rules out re-parsing
-them for every frame: :class:`Tailer` therefore keeps byte offsets and a little
-per-file parse continuation, and that is the whole of the program's mutable
-state. What it hands back -- a :class:`~burn.model.Snapshot` -- is immutable,
-and every view downstream is a pure function of one.
-"""
+"""Read and parse the Claude Code and Codex transcript trees."""
 
 from __future__ import annotations
 
@@ -17,8 +9,8 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from burn.format import moment, short
-from burn.model import (
+from .format import moment, short
+from .model import (
     CLAUDE,
     CODEX,
     FANOUT_TOOLS,
@@ -37,18 +29,13 @@ TREES = (
     (CODEX_ROOT, CODEX, "*/*/*/rollout-*.jsonl"),
 )
 
-# Sessions stay in the snapshot this long past the visible window, so widening
-# it with + does not blank the table until the next file actually changes.
+# Keep sessions beyond the visible window so a wider view can reuse them.
 GRACE = 3600
 
 
 @dataclass(frozen=True, slots=True)
 class Fragment:
-    """What one batch of appended lines contributed.
-
-    Calls arrive keyed by a request tag because a single API call is written as
-    several records; folding on the tag merges them without double-counting.
-    """
+    """Data parsed from one batch of appended lines."""
 
     calls: tuple[tuple[str, Call], ...] = ()
     fanout: tuple[str, ...] = ()
@@ -59,12 +46,7 @@ class Fragment:
 
 @dataclass(slots=True)
 class Carry:
-    """Parse state that survives between two reads of the same file.
-
-    A tool result can land in a batch of lines long after the ``tool_use`` that
-    named it, and a Codex call inherits the model and cwd from a header record
-    read minutes earlier.
-    """
+    """Parse state retained between reads of one file."""
 
     session: str = "?"
     project: str = "?"
@@ -85,13 +67,10 @@ class Tailer:
         self._gauges_at = ""
 
     async def sample(self, window: int) -> Snapshot:
-        """Read whatever is new in both trees and return the current snapshot.
+        """Read new records and return the current snapshot.
 
-        A first sample over a week of history costs the better part of a second,
-        nearly all of it parsing, and widening the window from the keyboard is
-        exactly what provokes one. So the sweep, the reads and the parse all run
-        off the event loop, and only the fold -- microseconds of dictionary
-        work -- happens back on it. The screen keeps answering keys throughout.
+        File scans and parsing run in a worker thread so the live view can
+        continue to accept input.
         """
         now = time.time()
         horizon = now - (max(window, 300) + 60) * 60
@@ -107,12 +86,7 @@ class Tailer:
         )
 
     def _read(self, horizon: float) -> list[tuple[Path, int, Fragment]]:
-        """The blocking half of a sample, run in a worker thread.
-
-        It touches the offset and carry maps, which is safe only because the
-        loop keeps at most one sample in flight; :meth:`sample` is the only
-        caller and enforces that by construction.
-        """
+        """Read files in a worker thread."""
         found = []
         for path, source in transcripts(horizon):
             lines, offset = tail(path, self._offsets.get(path, 0))
@@ -145,20 +119,13 @@ class Tailer:
 
 
 def parse(lines: Iterable[str], source: str, carry: Carry) -> Fragment:
-    """One batch of appended lines, in whichever format its tree uses."""
+    """Parse one batch of appended lines."""
     reader = read_claude if source == CLAUDE else read_codex
     return reader(decode(lines), carry)
 
 
 def read_claude(records: Iterable[dict], carry: Carry) -> Fragment:
-    """Claude Code assistant records, merged across their content blocks.
-
-    One API call is written as several records, one per content block, each
-    repeating the same usage. Keying on (message id, request id) merges them
-    without counting the tokens more than once -- and without losing the
-    ``tool_use`` blocks that live in the later records, which is why tools are
-    registered from any record whether or not it carries usage of its own.
-    """
+    """Parse Claude assistant records and merge content blocks."""
     calls: list[tuple[str, Call]] = []
     fanout: list[str] = []
     tools: list[Tooling] = []
@@ -205,7 +172,7 @@ def read_claude(records: Iterable[dict], carry: Carry) -> Fragment:
 
 
 def claude_results(record: dict, message: dict, carry: Carry) -> Iterator[Tooling]:
-    """Tool results and user text from one ``user`` record."""
+    """Parse tool results and user text from one ``user`` record."""
     content = message.get("content")
     if isinstance(content, str):
         if content.strip():
@@ -228,11 +195,7 @@ def claude_results(record: dict, message: dict, carry: Carry) -> Iterator[Toolin
 
 
 def read_codex(records: Iterable[dict], carry: Carry) -> Fragment:
-    """Codex ``token_count`` events, one per API request.
-
-    Each event reports both a running total and that request's own usage, and
-    the two reconcile exactly, so reading incrementally is also correct.
-    """
+    """Parse Codex ``token_count`` events."""
     calls: list[tuple[str, Call]] = []
     tools: list[Tooling] = []
     gauges: tuple[Gauge, ...] = ()
@@ -265,7 +228,7 @@ def read_codex(records: Iterable[dict], carry: Carry) -> Fragment:
 
 
 def codex_results(payload: dict, at: float, carry: Carry) -> Iterator[Tooling]:
-    """Tool calls and their outputs from one ``response_item`` record."""
+    """Parse tool calls and outputs from one ``response_item`` record."""
     kind = payload.get("type")
     if kind in ("custom_tool_call", "function_call"):
         carry.pending[payload.get("call_id")] = payload.get("name") or "?"
@@ -276,7 +239,7 @@ def codex_results(payload: dict, at: float, carry: Carry) -> Iterator[Tooling]:
 
 
 def codex_call(payload: dict, at: float, stamp: str, carry: Carry) -> tuple[str, Call] | None:
-    """The request a ``token_count`` event describes, if it describes one."""
+    """Parse the request described by a ``token_count`` event."""
     usage = (payload.get("info") or {}).get("last_token_usage")
     if not usage:
         return None
@@ -302,16 +265,18 @@ def codex_call(payload: dict, at: float, stamp: str, carry: Carry) -> tuple[str,
 
 
 def codex_gauges(reported: dict) -> tuple[Gauge, ...]:
-    """Codex's quota windows, ordered shortest first and keyed by length."""
-    found = [
-        Gauge(
-            used_percent=gauge.get("used_percent") or 0.0,
-            window_minutes=gauge.get("window_minutes") or 0,
-            resets_at=gauge.get("resets_at"),
-        )
-        for gauge in (reported.get(name) for name in ("primary", "secondary"))
-        if gauge
-    ]
+    """Parse and sort Codex quota windows by length."""
+    found = []
+    for name in ("primary", "secondary"):
+        gauge = reported.get(name)
+        if gauge:
+            found.append(
+                Gauge(
+                    used_percent=gauge.get("used_percent") or 0.0,
+                    window_minutes=gauge.get("window_minutes") or 0,
+                    resets_at=gauge.get("resets_at"),
+                )
+            )
     return tuple(sorted(found, key=lambda g: g.window_minutes))
 
 
@@ -334,7 +299,7 @@ def blocks(message: dict) -> Iterator[dict]:
 
 
 def transcripts(horizon: float) -> list[tuple[Path, str]]:
-    """Transcript files touched since the horizon, with their source tag."""
+    """Return transcript files changed since ``horizon``."""
     found = []
     for root, source, pattern in TREES:
         for path in root.glob(pattern):
@@ -347,12 +312,12 @@ def transcripts(horizon: float) -> list[tuple[Path, str]]:
 
 
 def tail(path: Path, offset: int) -> tuple[list[str], int]:
-    """Complete lines appended since the offset, and where to resume."""
+    """Read complete lines after ``offset`` and return the new offset."""
     try:
         size = path.stat().st_size
     except OSError:
         return [], offset
-    if size < offset:  # rewritten or rotated
+    if size < offset:  # The file was rewritten or rotated.
         offset = 0
     if size == offset:
         return [], offset
@@ -363,13 +328,13 @@ def tail(path: Path, offset: int) -> tuple[list[str], int]:
     except OSError:
         return [], offset
     end = blob.rfind(b"\n")
-    if end < 0:  # a partial line; wait for the rest
+    if end < 0:  # Wait for the rest of a partial line.
         return [], offset
     return blob[:end].decode("utf-8", "replace").splitlines(), offset + end + 1
 
 
 def records(path: Path) -> Iterator[dict]:
-    """Every record in a whole file, for the audits that must read all of it."""
+    """Yield every record in a file."""
     try:
         with path.open(errors="replace") as handle:
             yield from decode(handle)

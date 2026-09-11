@@ -1,7 +1,7 @@
-"""The live screen, composed from a snapshot and a view.
+"""Render the live screen from a snapshot and view state.
 
-Nothing here mutates either argument. The same pair always renders the same
-frame, so a regression is a string comparison.
+Nothing here mutates either argument. The same pair always renders the
+same frame. So a regression shows up as a string comparison.
 """
 
 from __future__ import annotations
@@ -12,20 +12,19 @@ from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
-from burn import views
-from burn.analysis import current_block, dollars, lanes, projected
-from burn.format import clock, label, quantity, span, sparkline, tint, trim
-from burn.keys import BINDINGS, HELP_TEXT
-from burn.model import BLOCK, CLAUDE, CODEX, Row, Snapshot
-from burn.state import FILTER, HELP, SORTS, TOOLS, View, cursor, rows, viewport
-from burn.widgets import meter
+from . import views
+from .analysis import current_block, dollars, lanes, projected
+from .format import clock, label, quantity, span, sparkline, tint, trim
+from .keys import BINDINGS, HELP_TEXT
+from .model import BLOCK, CLAUDE, CODEX, Row, Snapshot
+from .state import FILTER, HELP, SORTS, TOOLS, View, cursor, rows, viewport
+from .widgets import meter
 
 LANE_WIDTH = 48
 METER_WIDTH = 24
 ZOOM_LINES = 13
 
-# Masthead, meters, burn lanes, the table header, the scroll indicator, the key
-# bar, and the blank lines between them. Everything else is table.
+# Masthead, meters, burn lanes, table, scroll indicator, and key bar.
 CHROME = 13
 
 AGENT_STYLE = {CLAUDE: "cyan", CODEX: "magenta"}
@@ -34,7 +33,7 @@ IDLE = 120  # a session silent this long is dimmed
 
 
 def dashboard(snapshot: Snapshot, view: View, height: int = 24) -> Group:
-    """Meters, burn history, the session table, and a key bar."""
+    """Render meters, burn history, the session table, and key bar."""
     table = rows(view, snapshot)
     if view.mode == HELP:
         return Group(masthead(snapshot, view, table), Text(""), helpscreen(), keybar(view))
@@ -60,7 +59,7 @@ def dashboard(snapshot: Snapshot, view: View, height: int = 24) -> Group:
 
 
 def masthead(snapshot: Snapshot, view: View, table: list[Row]) -> Text:
-    """The one-line summary: uptime, how many sessions, and what is filtered."""
+    """Render the one-line summary."""
     active = sum(1 for row in table if snapshot.at - row.last <= IDLE)
     line = Text.assemble(
         ("burn", "bold"),
@@ -83,12 +82,12 @@ def masthead(snapshot: Snapshot, view: View, table: list[Row]) -> Text:
 
 
 def meters(snapshot: Snapshot, view: View) -> Group:
-    """htop-style bracket meters, one per quota window."""
+    """Render one bracket meter per quota window."""
     return Group(claude_meter(snapshot, view), *codex_meters(snapshot))
 
 
 def claude_meter(snapshot: Snapshot, view: View) -> Text:
-    """The five-hour block: what it has cost, and where it is heading."""
+    """Render the five-hour quota block."""
     made = [c for c in snapshot.calls if c.source == CLAUDE]
     start = current_block(made, snapshot.at)
     if start is None:
@@ -99,8 +98,7 @@ def claude_meter(snapshot: Snapshot, view: View) -> Text:
     money = sum(dollars(c) for c in inside)
     elapsed = snapshot.at - start
     left = max(BLOCK - elapsed, 0.0)
-    # With no quota recorded on disk there is no denominator, so the meter
-    # tracks the block's clock unless a limit was supplied.
+    # Without a quota, track elapsed time unless the user supplied a limit.
     if view.limit:
         fraction, tail = spent / view.limit, f"{quantity(spent)}/{quantity(view.limit)}"
     else:
@@ -116,7 +114,7 @@ def claude_meter(snapshot: Snapshot, view: View) -> Text:
 
 
 def codex_meters(snapshot: Snapshot) -> list[Text]:
-    """One line per quota window Codex has reported, shortest first."""
+    """Render Codex quota windows from shortest to longest."""
     if not snapshot.gauges:
         return [Text.assemble(("Codex     ", "magenta"), ("  no rate-limit event seen", "dim"))]
     return [
@@ -131,7 +129,7 @@ def codex_meters(snapshot: Snapshot) -> list[Text]:
 
 
 def burn_lanes(snapshot: Snapshot, view: View) -> RenderableType:
-    """Weighted burn per bucket across the window, one lane per agent."""
+    """Render weighted burn by agent and time bucket."""
     windowed = snapshot.since(view.seconds).from_agent(view.source)
     series = lanes(windowed.calls, snapshot.at, view.seconds, LANE_WIDTH)
     step = view.seconds / LANE_WIDTH
@@ -148,7 +146,7 @@ def burn_lanes(snapshot: Snapshot, view: View) -> RenderableType:
 
 
 def sessions(shown: list[Row], view: View, now: float, at: int, offset: int) -> Table:
-    """The process table, with a cursor and a marked sort column."""
+    """Render the session table with selection and sort indicators."""
     table = Table(box=None, pad_edge=False, collapse_padding=True, header_style="bold")
     table.add_column(" ", width=1, no_wrap=True)
     for name, width in (("SRC", 3), ("SESSION", 9), ("PROJECT", 10), ("MODEL", 9)):
@@ -182,14 +180,20 @@ def sessions(shown: list[Row], view: View, now: float, at: int, offset: int) -> 
 
 
 def scrollbar(total: int, drawn: int, offset: int) -> Text:
-    """Say what is off-screen, the way a pager does."""
+    """Report rows that are off-screen."""
     above, below = offset, total - offset - drawn
-    parts = [f"▲ {above} above"] * bool(above) + [f"▼ {below} below"] * bool(below)
-    return Text("  " + "   ".join(parts), style="dim") if parts else Text("")
+    parts = []
+    if above:
+        parts.append(f"▲ {above} above")
+    if below:
+        parts.append(f"▼ {below} below")
+    if not parts:
+        return Text("")
+    return Text("  " + "   ".join(parts), style="dim")
 
 
 def zoom(snapshot: Snapshot, view: View, table: list[Row], at: int) -> RenderableType:
-    """The detail pane under the table, for whichever session is selected."""
+    """Render the detail pane for the selected session."""
     if not table:
         return Text("  no session selected", style="dim")
     chosen = table[at].session
@@ -205,7 +209,7 @@ def zoom(snapshot: Snapshot, view: View, table: list[Row], at: int) -> Renderabl
 
 
 def helpscreen() -> RenderableType:
-    """Every binding, since a top-alike is worthless if you must read the source."""
+    """Render the key reference."""
     layout = Table.grid(padding=(0, 3))
     layout.add_column(style="bold cyan", justify="right")
     layout.add_column()
@@ -217,17 +221,18 @@ def helpscreen() -> RenderableType:
         layout,
         Text(""),
         Text(
-            "  Columns: CTX is the current context size, HIT the share of input\n"
-            "  served from cache, THINK reasoning tokens, WEIGHT tokens in\n"
-            "  input-token equivalents, RATE the weighted burn over five minutes.\n"
-            "  ⑂ marks a session that fanned out to subagents.",
+            "  Columns: CTX is the current context size. HIT is the share of\n"
+            "  input served from cache. THINK is reasoning tokens. WEIGHT is\n"
+            "  tokens in input-token equivalents. RATE is the weighted burn\n"
+            "  over five minutes. ⑂ marks a session that fanned out to\n"
+            "  subagents.",
             style="dim",
         ),
     )
 
 
 def keybar(view: View) -> Text:
-    """htop's function-key strip, in the letters this program actually reads."""
+    """Render the key bar."""
     if view.mode == FILTER:
         return Text.assemble(
             ("filter", "black on yellow"),
@@ -245,7 +250,7 @@ def keybar(view: View) -> Text:
 
 
 def heading(name: str, view: View) -> Text:
-    """Mark the column the table is sorted on, the way top does."""
+    """Mark the active sort column."""
     for field, column in SORTS:
         if column == name and view.sort == field:
             return Text(name + ("▼" if view.reverse else "▲"), style="black on cyan")

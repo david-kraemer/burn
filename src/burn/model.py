@@ -1,11 +1,4 @@
-"""The immutable record every view is built from.
-
-One normalised call type spans two very different transcript formats, so
-nothing downstream of ingestion needs to know which agent produced a record.
-Everything here is frozen: a :class:`Snapshot` is a value, views are functions
-of that value, and the only mutable object in the program is the tailer that
-produces snapshots.
-"""
+"""Immutable records used by the views."""
 
 from __future__ import annotations
 
@@ -14,14 +7,16 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from itertools import pairwise
 
-# Relative to one input token, at Anthropic's published ratios. A raw token sum
-# is ~95% cache reads and badly overstates what a session actually consumes.
+__all__ = ["Call", "Gauge", "Row", "Snapshot", "Tooling", "Usage"]
+
+# Weights are relative to one input token.
+# Raw sums overstate cost because cache reads are cheaper.
 CACHE_WRITE_WEIGHT = 1.25
 CACHE_READ_WEIGHT = 0.1
 OUTPUT_WEIGHT = 5.0
 
 BLOCK = 300 * 60  # Claude Code's rolling quota block, in seconds
-CACHE_TTL = 5 * 60  # the short ephemeral cache tier expires this fast
+CACHE_TTL = 5 * 60  # short cache lifetime, in seconds
 
 CLAUDE = "cc"
 CODEX = "cx"
@@ -40,12 +35,12 @@ class Usage:
 
     @property
     def prefix(self) -> int:
-        """Everything the model was fed: the whole conversation so far."""
+        """Tokens sent as input, including cached tokens."""
         return self.input + self.cache_write + self.cache_read
 
     @property
     def weight(self) -> float:
-        """Tokens in input-token equivalents, so cache reads stop dominating."""
+        """Usage converted to input-token equivalents."""
         return (
             self.input
             + CACHE_WRITE_WEIGHT * self.cache_write
@@ -64,7 +59,7 @@ class Usage:
 
 @dataclass(frozen=True, slots=True)
 class Call:
-    """One API request, whichever agent made it."""
+    """One API request from either agent."""
 
     at: float
     source: str
@@ -89,7 +84,7 @@ class Call:
 
 @dataclass(frozen=True, slots=True)
 class Tooling:
-    """A tool result landing back in the conversation."""
+    """A tool result returned to a conversation."""
 
     at: float
     session: str
@@ -99,13 +94,7 @@ class Tooling:
 
 @dataclass(frozen=True, slots=True)
 class Gauge:
-    """One of Codex's quota windows, as last reported.
-
-    Codex states each window's length explicitly and does not promise that
-    "primary" means five hours -- for six weeks of one history the only gauge
-    present was the seven-day one, under that same key. The label therefore
-    comes from ``window_minutes``, never from the key.
-    """
+    """A quota window reported by Codex."""
 
     used_percent: float
     window_minutes: int
@@ -114,7 +103,7 @@ class Gauge:
 
 @dataclass(frozen=True, slots=True)
 class Snapshot:
-    """Everything harvested from disk, as of one instant."""
+    """Data read from disk at one point in time."""
 
     at: float = field(default_factory=time.time)
     calls: tuple[Call, ...] = ()
@@ -122,7 +111,7 @@ class Snapshot:
     gauges: tuple[Gauge, ...] = ()
 
     def since(self, seconds: float) -> Snapshot:
-        """The same snapshot narrowed to the last ``seconds`` of history."""
+        """Return data from the last ``seconds``."""
         cutoff = self.at - seconds
         return replace(
             self,
@@ -131,7 +120,7 @@ class Snapshot:
         )
 
     def from_agent(self, source: str | None) -> Snapshot:
-        """The same snapshot restricted to one agent, or unchanged if None."""
+        """Return data for ``source``, or all data when it is None."""
         if source is None:
             return self
         sessions = {c.session for c in self.calls if c.source == source}
@@ -144,7 +133,7 @@ class Snapshot:
 
 @dataclass(frozen=True, slots=True)
 class Row:
-    """One session, reduced to the columns the table sorts on."""
+    """One session summarized for the table."""
 
     source: str
     session: str
@@ -163,21 +152,15 @@ class Row:
 
 
 def compactions(calls: Iterable[Call]) -> int:
-    """How many times the context was discarded and rebuilt from a summary."""
+    """Count context compactions."""
     return sum(1 for a, b in pairwise(calls) if b.prefix < a.prefix * 0.7)
 
 
 def threads(calls: Iterable[Call]) -> list[list[Call]]:
-    """Split one session's calls into separately growing conversations.
+    """Split interleaved calls into separately growing conversations.
 
-    A session id does not always mean a single linear conversation. Codex runs
-    side threads under the same id, so its calls arrive interleaved -- a real
-    session bounces between a 162k prefix and an 88k one. Read as one
-    conversation, every switch back up looks like 74k of fresh context, and the
-    session accumulates 3.6M of "growth" against a context that never exceeded
-    168k. A conversation only ever grows, so each call belongs to the open
-    thread whose last prefix sits closest below it; a call that undercuts every
-    open thread has been compacted, and starts a new one.
+    Assign each call to the open thread with the closest lower prefix. Start a
+    new thread when no open thread can contain the call.
     """
     open_: list[list[Call]] = []
     for call in calls:

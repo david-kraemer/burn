@@ -11,7 +11,7 @@ Column = tuple[str, int]
 
 
 def meter(fraction: float, width: int, style: str = "cyan") -> Text:
-    """An htop bracket meter."""
+    """Render a bracket meter."""
     filled = max(0, min(width, round(fraction * width)))
     return Text.assemble(
         ("[", "dim"), ("|" * filled, style), (" " * (width - filled), ""), ("]", "dim")
@@ -19,13 +19,13 @@ def meter(fraction: float, width: int, style: str = "cyan") -> Text:
 
 
 def bar(percent: float, width: int = 8) -> str:
-    """A solid proportion bar, for table cells."""
+    """Render a proportion bar for a table cell."""
     filled = min(width, max(0, round(percent / 100 * width)))
     return "█" * filled + "░" * (width - filled)
 
 
 def grid(rows: Iterable[tuple[str, object]]) -> Table:
-    """A two-column label/value block, the shape every detail pane uses."""
+    """Render a two-column label and value block."""
     layout = Table.grid(padding=(0, 2))
     layout.add_column(style="dim")
     layout.add_column()
@@ -35,7 +35,7 @@ def grid(rows: Iterable[tuple[str, object]]) -> Table:
 
 
 def columns(left: Iterable[Column], right: Iterable[Column] = ()) -> Table:
-    """A borderless table: named left-aligned columns, then right-aligned ones."""
+    """Create a borderless table with left and right columns."""
     table = Table(box=None, pad_edge=False, header_style="bold", title_justify="left")
     for name, width in left:
         table.add_column(name, width=width, no_wrap=True)

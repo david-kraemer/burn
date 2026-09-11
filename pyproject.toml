@@ -26,6 +26,9 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/burn/__init__.py" = ["F403"]  # re-exports model's public names
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

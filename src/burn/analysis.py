@@ -1,8 +1,4 @@
-"""Everything derived from a snapshot: attribution, quota blocks, rates, rows.
-
-All of it is pure. Given the same snapshot these functions give the same
-answer, which is what makes the views testable without a terminal.
-"""
+"""Derive attribution, quota, rate, and table data from a snapshot."""
 
 from __future__ import annotations
 
@@ -17,9 +13,9 @@ from functools import cache
 from itertools import pairwise
 from pathlib import Path
 
-from burn.format import short
-from burn.ingest import CLAUDE_ROOT, claude_usage, records
-from burn.model import (
+from .format import short
+from .ingest import CLAUDE_ROOT, claude_usage, records
+from .model import (
     BLOCK,
     CACHE_READ_WEIGHT,
     CACHE_WRITE_WEIGHT,
@@ -35,7 +31,7 @@ from burn.model import (
 RATES_CACHE = Path.home() / ".cache" / "burn" / "rates.json"
 RATES_TTL = 86400
 
-# A re-created cache token costs 1.25 units where a read costs 0.1.
+# A recreated cache token costs 1.25 units. A cache read costs 0.1.
 IDLE_PREMIUM = CACHE_WRITE_WEIGHT - CACHE_READ_WEIGHT
 
 
@@ -53,7 +49,7 @@ def sessions(calls: Iterable[Call]) -> dict[str, list[Call]]:
 
 
 def tabulate(snapshot: Snapshot, needle: str = "") -> list[Row]:
-    """Collapse a snapshot's calls into one row per session."""
+    """Return one table row per session."""
     groups: dict[tuple[str, str, str], list[Call]] = defaultdict(list)
     for call in snapshot.calls:
         groups[(call.source, call.session, call.project)].append(call)
@@ -91,7 +87,7 @@ def tabulate(snapshot: Snapshot, needle: str = "") -> list[Row]:
 
 
 def lanes(calls: Iterable[Call], now: float, seconds: float, width: int) -> dict[str, list[float]]:
-    """Weighted burn per bucket across the window, one series per agent."""
+    """Return weighted burn by agent and time bucket."""
     step = seconds / width
     series: dict[str, list[float]] = {}
     for call in calls:
@@ -106,7 +102,7 @@ def lanes(calls: Iterable[Call], now: float, seconds: float, width: int) -> dict
 
 @dataclass(frozen=True, slots=True)
 class Blame:
-    """What one tool put into the conversation, and what it kept costing."""
+    """Context added by one tool and its later read cost."""
 
     name: str
     added: float
@@ -119,17 +115,11 @@ PROMPT = "(prompt / system)"
 
 
 def attribution(calls: Iterable[Call], tooling: Iterable[Tooling]) -> list[Blame]:
-    """Split each session's context growth across the tools that caused it.
+    """Assign context growth and later read cost to its tools.
 
-    Context growth between two consecutive calls in a session, less the
-    assistant's own output, is what tool results and user text injected. That
-    growth is real billed tokens, split across the tools that ran in between in
-    proportion to the size of what they returned.
-
-    Each tool is also charged for what it keeps costing. Tokens a tool puts into
-    the conversation are written to cache once and then re-read by every later
-    call in the session, so a big result early in a long session is far more
-    expensive than the same result at the end.
+    Growth is the increase between calls, less the assistant's output. Split
+    it among intervening tools by result size. Charge each tool for later
+    reads of its cached result.
     """
     events = sessions_of(tooling)
     totals: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])
@@ -139,12 +129,10 @@ def attribution(calls: Iterable[Call], tooling: Iterable[Tooling]) -> list[Blame
         stamps = [event.at for event in series]
         for strand in threads(items):
             for index, (previous, call) in enumerate(pairwise(strand)):
-                # Written to cache once, then re-read by every later call in
-                # this thread. It stops there: a compaction starts a new
-                # thread, and what the summary replaced is not re-read again.
+                # The result is cached once and read by later calls in this
+                # thread. A compaction starts a new thread.
                 carry = CACHE_WRITE_WEIGHT + CACHE_READ_WEIGHT * max(len(strand) - index - 2, 0)
-                # Growth is what entered the conversation, less what the model
-                # itself wrote.
+                # Growth is new context, less the model's output.
                 growth = call.prefix - previous.prefix - previous.usage.output
                 if growth <= 0:
                     continue
@@ -164,7 +152,7 @@ def attribution(calls: Iterable[Call], tooling: Iterable[Tooling]) -> list[Blame
 
 
 def shares(between: Sequence[Tooling], growth: float) -> Iterator[tuple[str, float]]:
-    """Split one step's growth across the tools that ran during it, by result size."""
+    """Split one growth step among intervening tools by result size."""
     if not between:
         yield PROMPT, growth
         return
@@ -174,7 +162,7 @@ def shares(between: Sequence[Tooling], growth: float) -> Iterator[tuple[str, flo
 
 
 def sessions_of(tooling: Iterable[Tooling]) -> dict[str, list[Tooling]]:
-    """Tool results grouped by session, each group in time order."""
+    """Group tool results by session and sort them by time."""
     grouped: dict[str, list[Tooling]] = defaultdict(list)
     for event in tooling:
         grouped[event.session].append(event)
@@ -188,7 +176,7 @@ def sessions_of(tooling: Iterable[Tooling]) -> dict[str, list[Tooling]]:
 
 @dataclass(frozen=True, slots=True)
 class Waste:
-    """Cache re-creation, split into what was avoidable and what was not."""
+    """Cache recreation split into idle and normal churn."""
 
     idle_tokens: int
     idle_events: int
@@ -200,12 +188,12 @@ class Waste:
 
     @property
     def premium(self) -> float:
-        """Weighted tokens paid purely because the cache had expired."""
+        """Weighted tokens caused by an expired cache."""
         return self.idle_tokens * IDLE_PREMIUM
 
 
 def waste(calls: Iterable[Call], ttl: float) -> Waste:
-    """How much cache creation followed a gap longer than the cache's life."""
+    """Measure cache creation after gaps longer than the cache lifetime."""
     idle_tokens = idle_events = churn = 0
     for items in sessions(calls).values():
         for previous, call in pairwise(items):
@@ -220,7 +208,7 @@ def waste(calls: Iterable[Call], ttl: float) -> Waste:
 
 
 def resumes(calls: Sequence[Call], ttl: float) -> int:
-    """Cache creations in one session that followed an idle gap."""
+    """Count cache creations after idle gaps in one session."""
     return sum(1 for a, b in pairwise(calls) if b.usage.cache_write and b.at - a.at > ttl)
 
 
@@ -228,11 +216,7 @@ def resumes(calls: Sequence[Call], ttl: float) -> int:
 
 
 def current_block(calls: Iterable[Call], now: float) -> float | None:
-    """Start of the five-hour quota block covering now, if one is open.
-
-    A block opens on the hour containing the first request after a five-hour
-    lull, and closes five hours later or after five idle hours.
-    """
+    """Return the open five-hour quota block, if one exists."""
     start = last = None
     for stamp in sorted(c.at for c in calls):
         if start is None or stamp - start >= BLOCK or stamp - last >= BLOCK:
@@ -244,7 +228,7 @@ def current_block(calls: Iterable[Call], now: float) -> float | None:
 
 
 def projected(spent: float, elapsed: float, remaining: float) -> float:
-    """Where the current burn rate lands by the end of the block."""
+    """Project spend at the end of the quota block."""
     return spent + spent / max(elapsed, 60) * remaining
 
 
@@ -253,13 +237,10 @@ def projected(spent: float, elapsed: float, remaining: float) -> float:
 
 @cache
 def rates() -> Mapping[str, tuple[float, int]]:
-    """Dollars per weighted megatoken, per model, from your own billing records.
+    """Calculate dollars per weighted megatoken for each model.
 
-    Claude writes a cost-state record carrying its own dollar figure when a
-    session closes. Dividing that by the weighted tokens observed in the same
-    session gives an effective rate with nothing hardcoded -- but only for
-    sessions whose tokens reconcile, since a session that fanned out to
-    subagents is billed for traffic no transcript contains.
+    Use closed Claude sessions whose observed and billed totals match.
+    Exclude sessions with unrecorded subagent traffic.
     """
     if (cached := cached_rates()) is not None:
         return cached
@@ -288,32 +269,31 @@ def dollars(call: Call) -> float:
 
 
 def blended_rate() -> float:
-    """One dollars-per-weighted-token figure, for totals spanning models."""
+    """Return one average rate for totals spanning models."""
     solved = [rate for rate, _ in rates().values()]
     return sum(solved) / len(solved) / 1e6 if solved else 0.0
 
 
 def cached_rates() -> Mapping[str, tuple[float, int]] | None:
-    """Yesterday's solution, if it is still fresh and still parses."""
+    """Load a fresh, valid cached rate calculation."""
     try:
         if time.time() - RATES_CACHE.stat().st_mtime >= RATES_TTL:
             return None
         stored = json.loads(RATES_CACHE.read_text())
         return {k: (float(v[0]), int(v[1])) for k, v in stored.items()}
     except (OSError, ValueError, TypeError, IndexError, KeyError):
-        return None  # missing, truncated or hand-edited; solve it again
+        return None  # Recalculate missing or invalid data.
 
 
 def save_rates(solved: Mapping[str, tuple[float, int]]) -> None:
-    """Write via a temporary file, so two concurrent runs cannot leave a
-    half-written cache behind for the next day."""
+    """Save rates through a temporary file."""
     try:
         RATES_CACHE.parent.mkdir(parents=True, exist_ok=True)
         scratch = RATES_CACHE.with_suffix(f".{os.getpid()}.tmp")
         scratch.write_text(json.dumps(solved))
         scratch.replace(RATES_CACHE)
     except OSError:
-        pass  # a cache is an optimisation, not a requirement
+        pass  # The cache is optional.
 
 
 # ---------------------------------------------------------------- audit
@@ -321,7 +301,7 @@ def save_rates(solved: Mapping[str, tuple[float, int]]) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Reconciliation:
-    """One closed session, as this tool sees it against what Claude billed."""
+    """One closed session compared with Claude's billed total."""
 
     session: str
     observed: float
@@ -330,17 +310,12 @@ class Reconciliation:
 
     @property
     def unseen(self) -> float:
-        """Percent of billed tokens no transcript record accounts for."""
+        """Percent of billed tokens absent from the transcript."""
         return 100 * (self.billed - self.observed) / self.billed
 
 
 def audit() -> list[Reconciliation]:
-    """Every closed Claude session that recorded its own billed total.
-
-    cost-state records land when a session closes and cover everything it was
-    billed for, subagents included, so the shortfall against them is exactly
-    the traffic this tool cannot see.
-    """
+    """Return closed Claude sessions with billed totals."""
     found = []
     for path in sorted(CLAUDE_ROOT.glob("*/*.jsonl")):
         observed, billed, fanout = reconcile(path)
@@ -350,7 +325,7 @@ def audit() -> list[Reconciliation]:
 
 
 def reconcile(path: Path) -> tuple[float, float, bool]:
-    """Weighted tokens this tool sees, what Claude billed, and whether it fanned out."""
+    """Return observed tokens, billed tokens, and fan-out status."""
     observed = billed = 0.0
     fanout = False
     seen: set[str] = set()
@@ -377,7 +352,7 @@ def reconcile(path: Path) -> tuple[float, float, bool]:
 
 
 def billed_models(path: Path) -> Iterator[tuple[str, float, float]]:
-    """Per-model weighted tokens and dollars from a session's cost-state record."""
+    """Return per-model tokens and dollars from a cost-state record."""
     for record in records(path):
         if record.get("type") == "cost-state":
             for model, weight, cost in cost_state(record):

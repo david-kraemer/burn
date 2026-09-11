@@ -1,8 +1,8 @@
-"""One keypress in, one new view out.
+"""Map keypresses to view state.
 
-``apply`` is total and pure: it never touches the terminal, never reads the
-disk, and returns ``None`` only to mean quit. That is what lets the whole
-interactive surface be exercised in a test as a list of keystrokes.
+``apply`` is total and pure. It never touches the terminal. It never
+reads the disk. It returns ``None`` only to mean quit. That is what lets
+a test exercise the whole interactive surface as a list of keystrokes.
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 
-from burn.model import Row
-from burn.state import (
+from .model import Row
+from .state import (
     AGENTS,
     FILTER,
     HELP,
@@ -61,7 +61,7 @@ HELP_TEXT = (
 
 
 def apply(key: str, view: View, table: Sequence[Row]) -> View | None:
-    """The view after this keypress, or None to quit."""
+    """Return the next view, or None to quit."""
     if view.mode == FILTER:
         return typing(key, view)
     if view.mode == HELP:
@@ -70,7 +70,7 @@ def apply(key: str, view: View, table: Sequence[Row]) -> View | None:
 
 
 def typing(key: str, view: View) -> View:
-    """Editing the filter: the only mode where keys are text, not commands."""
+    """Filter-entry state."""
     if key in ENTER:
         return replace(view, needle=view.draft, mode=TABLE)
     if key == ESCAPE:
@@ -81,7 +81,7 @@ def typing(key: str, view: View) -> View:
 
 
 def command(key: str, view: View, table: Sequence[Row]) -> View | None:
-    """A keypress in the table."""
+    """A keypress while the table is active."""
     match key:
         case k if k in QUIT:
             return None
@@ -116,7 +116,7 @@ def command(key: str, view: View, table: Sequence[Row]) -> View | None:
 
 
 def step(view: View, table: Sequence[Row], by: int) -> str | None:
-    """The session ``by`` rows from the selection, clamped to the table."""
+    """Return the selected session rows, clamped to the table."""
     if not table:
         return None
     at = min(max(cursor(view, list(table)) + by, 0), len(table) - 1)

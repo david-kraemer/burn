@@ -1,10 +1,10 @@
-"""The interactive loop.
+"""Run the interactive loop.
 
-Sampling reads a few hundred files and takes long enough to be felt, so it runs
-as a task rather than inline: keystrokes are served by the event loop while a
-sample is still in flight, and the screen never freezes mid-harvest. The view
-has exactly one owner -- this loop -- and every keypress replaces it outright,
-so there is no state to synchronise between the two.
+Sampling reads a few hundred files. That takes long enough to feel, so it
+runs as a task, not inline. Keystrokes are served by the event loop while
+a sample is still in flight, and the screen never freezes mid-read. This
+loop is the view's only owner. Every keypress replaces the view outright,
+so there is no state to synchronise.
 """
 
 from __future__ import annotations
@@ -21,22 +21,21 @@ from contextlib import asynccontextmanager
 from rich.console import Console
 from rich.live import Live
 
-from burn import keys as bindings
-from burn.dashboard import dashboard
-from burn.ingest import Tailer
-from burn.model import Snapshot
-from burn.state import View, rows
+from . import keys as bindings
+from .dashboard import dashboard
+from .ingest import Tailer
+from .model import Snapshot
+from .state import View, rows
 
 CSI = "\x1b["
 
 
 async def monitor(console: Console, view: View) -> None:
-    """Redraw on a timer, and at once on a keypress."""
+    """Redraw on a timer or after a keypress."""
     tailer = Tailer()
     async with keyboard() as pressed:
-        # Take the first sample before switching to the alternate screen, so the
-        # opening frame has data in it rather than flashing an empty table.
-        # Keys struck meanwhile are already being queued.
+        # Sample before entering the alternate screen. This prevents an empty
+        # first frame. Keys pressed during sampling remain queued.
         snapshot = await tailer.sample(view.window)
         with Live(console=console, screen=True, auto_refresh=False) as live:
             sampling: asyncio.Task[Snapshot] | None = None
@@ -51,8 +50,8 @@ async def monitor(console: Console, view: View) -> None:
                     if waiting is None:
                         waiting = asyncio.create_task(pressed.get())
 
-                    # Only idle on a clock when nothing else can wake us: with a
-                    # sample in flight, its completion is the next event.
+                    # Wait on the clock only when no other event can wake us.
+                    # A running sample wakes us when it completes.
                     pending = {waiting} if sampling is None else {waiting, sampling}
                     idle = view.paused or sampling is not None
                     done, _ = await asyncio.wait(
@@ -71,7 +70,7 @@ async def monitor(console: Console, view: View) -> None:
                         if updated is None:
                             return
                         if updated.window != view.window:
-                            due = 0.0  # a wider window needs older files read now
+                            due = 0.0  # read older files for a wider window
                         view = updated
             finally:
                 for task in (sampling, waiting):
@@ -81,7 +80,7 @@ async def monitor(console: Console, view: View) -> None:
 
 @asynccontextmanager
 async def keyboard() -> AsyncIterator[asyncio.Queue[str]]:
-    """Keypresses as a queue, or an empty one where there is no terminal."""
+    """Return queued keypresses, or none when stdin is not a terminal."""
     queue: asyncio.Queue[str] = asyncio.Queue()
     if not sys.stdin.isatty():
         yield queue
@@ -109,7 +108,7 @@ async def keyboard() -> AsyncIterator[asyncio.Queue[str]]:
 
 
 def split(data: str) -> list[str]:
-    """One burst of input as individual keys, arrow escapes kept whole."""
+    """Read one burst of input and keep arrow escapes intact."""
     found, at = [], 0
     while at < len(data):
         if data[at : at + 2] == CSI:

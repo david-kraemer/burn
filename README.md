@@ -1,139 +1,162 @@
 # burn
 
-Token burn inspection for Claude Code and Codex, built entirely from the JSONL
-transcripts both agents already write. Nothing to instrument.
+`burn` is a terminal user interface (TUI) for monitoring token use in Claude
+Code and Codex.
 
-    burn                  live per-session monitor
-    burn tools            which tools are inflating context
-    burn turns            the most expensive prompts
-    burn session <id>     one session in detail
-    burn cost             spend, at rates calibrated from your own billing
-    burn waste            cache re-creation you are paying for
-    burn verify           audit against Claude's own totals
-
-`--window <minutes>` on any view, `--source cc|cx` to isolate one agent,
-`--sort <column>` to pick the starting sort, `--once` for a single frame.
-A 24-hour window takes about 0.3s.
+It reads the JSONL transcript files that these tools already write. It does
+not instrument either tool.
 
 ## Install
 
-    uv tool install --editable .
+Install the command with `uv`:
 
-Editable, so edits to the working tree take effect with no reinstall. Drop
-`--editable` for a snapshot install instead.
+```sh
+uv tool install --editable .
+```
 
-The file also carries a PEP 723 header, so `uv run burn.py` works in a fresh
-clone with nothing installed at all. `check.py` re-runs the correctness checks
-behind the fixes described below.
+Use `--editable` while developing `burn`. Omit it to install a snapshot.
 
-## The live view is interactive
+The repository also supports a standalone run:
 
-Like `top`, it is driven from the keyboard rather than from flags.
+```sh
+uv run burn.py
+```
 
-| key | what it does |
-|---|---|
-| `↑ ↓` `j k` | move the cursor |
-| `↵` | zoom the selected session into a pane below the table |
-| `t` | swap that pane between tools and turns |
-| `s` `S` | cycle the sort column forwards / backwards |
-| `r` | reverse the sort order |
-| `/` | filter by session, project, model or agent |
-| `a` | cycle agent: both → claude → codex |
-| `+` `-` | widen / narrow the time window |
-| `space` | pause and resume sampling |
-| `c` | clear filter, zoom and agent selection |
-| `h` `?` | key reference |
-| `q` | quit |
+This command installs the script dependencies in an isolated environment.
 
-The sorted column is marked in its header, the table scrolls to fit whatever
-height the terminal has (with a count of what is off-screen), sessions seen for
-the first time flash green, and sessions quiet for two minutes dim out.
+## Use
 
-Quota meters run across the top in `htop` bracket style. Codex's are real
-percentages from its own records; Claude's tracks the five-hour block's clock,
-because no allowance is written to disk — pass `--limit` (e.g. `--limit 40e6`)
-to turn it into a true gauge against a number you supply.
+Run `burn` without a subcommand to open the live monitor.
 
-## Where the numbers come from
+```text
+burn
+burn tools
+burn turns
+burn session <session-id-prefix>
+burn cost
+burn waste
+burn verify
+```
 
-| | Claude Code | Codex |
-|---|---|---|
-| files | `~/.claude/projects/*/*.jsonl` | `~/.codex/sessions/Y/M/D/rollout-*.jsonl` |
-| one API call | `type:"assistant"` → `message.usage` | `event_msg` → `token_count` |
-| quota | not recorded; reconstructed from gaps | `rate_limits.used_percent`, exact |
-| cost | `cost-state`, at session close | not recorded at all |
+The views have these purposes:
 
-Both formats are append-only, so each poll seeks to the byte offset it stopped
-at. Everything normalises to one `Call` record, which is what every view reads.
+| Command | Purpose |
+| --- | --- |
+| `burn` | Show token use by session. |
+| `burn tools` | Show context growth by tool. |
+| `burn turns` | Show the most expensive prompts. |
+| `burn session <id>` | Show one session in detail. |
+| `burn cost` | Estimate spend by model and project. |
+| `burn waste` | Show cache tokens recreated after idle periods. |
+| `burn verify` | Compare observed Claude tokens with Claude totals. |
 
-Claude writes one record *per content block*, all repeating the same usage.
-Keying on `(message id, request id)` merges them without double-counting the
-tokens and without losing the `tool_use` blocks, which live in the later
-records — the raw-to-merged ratio is about 2.0, so skipping this roughly
-doubles every figure.
+Common options:
 
-## WEIGHT, not total
+```text
+--window <minutes>    History window. The default is 300 minutes.
+--source cc|cx        Show Claude Code or Codex only.
+--sort <column>       Select the initial sort column.
+--top <number>        Limit rows in detail views. The default is 15.
+--interval <seconds>  Refresh interval for the live view. The default is 2.
+--limit <tokens>      Set the Claude five-hour weighted-token allowance.
+--once                Print one live-view frame and exit.
+```
 
-Cache reads cost a tenth of an input token but dominate any raw sum. `WEIGHT`
-charges input 1x, cache writes 1.25x, cache reads 0.1x and output 5x, matching
-Anthropic's published ratios, so a single number tracks what is being spent.
+For example:
 
-## ADDED vs CARRIED
+```sh
+burn --window 60 --source cx
+burn tools --window 1440 --top 20
+burn --once
+```
 
-`burn tools` attributes context growth to the tool that caused it. Growth
-between two consecutive calls, less the assistant's own output, is what tool
-results and user text injected; it is split across the tools that ran in
-between, in proportion to what each returned.
+## Live-view controls
 
-`CARRIED` then charges each tool for what it *keeps* costing. Tokens are
-written to cache once and re-read by every later call, so the same result early
-in a long thread costs many times what it costs at the end. The gap is not
-small — over a recent day here, 2.2M tokens added became 12.0M weighted once
-re-reads were counted.
+| Key | Action |
+| --- | --- |
+| `↑` `↓`, `j` `k` | Move through the sessions. |
+| `Enter` | Open or close the selected session. |
+| `t` | Switch the detail pane between tools and turns. |
+| `s`, `S` | Change the sort column. |
+| `r` | Reverse the sort order. |
+| `/` | Filter by session, project, model, or agent. Press `Enter` to accept. |
+| `a` | Cycle through both agents, Claude Code, and Codex. |
+| `+`, `-` | Increase or decrease the time window. |
+| `Space` | Pause or resume sampling. |
+| `c` | Clear the filter, selection, and agent filter. |
+| `h`, `?` | Show the key reference. |
+| `q` | Quit. |
 
-Two things bound that figure, and without them it runs away:
+## Data sources
 
-*Threads.* A session id is not always one linear conversation. Codex runs side
-threads under the same id, so its calls arrive interleaved — a real session
-here bounces between a 162k prefix and an 88k one. Read as a single
-conversation, every switch back up looks like 74k of fresh context, and that
-session accumulated 3.6M of "growth" against a context that never exceeded
-168k. Calls are therefore assigned to the open thread whose last prefix sits
-closest below them.
+`burn` reads these files:
 
-*Compaction.* A call that undercuts every open thread has had its context
-discarded and replaced by a summary, so it starts a new thread and the old
-one stops accruing re-reads.
+| Agent | Transcript location | Usage record |
+| --- | --- | --- |
+| Claude Code | `~/.claude/projects/*/*.jsonl` | `assistant` records and `message.usage` |
+| Codex | `~/.codex/sessions/Y/M/D/rollout-*.jsonl` | `event_msg` records and `token_count` |
 
-CARRIED is a decomposition of what a session actually spent, so it must never
-exceed it. It is checked against that invariant: across 66 local sessions the
-largest CARRIED is 0.78 of its session's real weighted total.
+The program normalizes both formats into one call record. It reads new data on
+each refresh and keeps track of the last byte read from each transcript.
 
-## Rates are calibrated, not hardcoded
+Claude Code can write several records for one API call. `burn` merges records
+with the same message and request identifiers so that it does not count the
+same usage more than once.
 
-Claude writes its own dollar figure into `cost-state` when a session closes.
-Dividing that by the weighted tokens observed in the same session gives an
-effective `$/weighted-Mtok` per model with nothing hardcoded, so it cannot go
-stale as models change.
+## Token weight
 
-Only sessions whose tokens reconcile are used. Fitting actual per-token prices
-by least squares was tried first and fails: `cache_creation` mixes two
-ephemeral tiers at different prices, and fan-out sessions are billed for tokens
-no transcript contains, which drags the fit to implausible values (negative
-input prices). The blended rate is robust where the fit is not.
+The monitor reports `WEIGHT`, which expresses usage in input-token equivalents.
+It applies these relative weights:
 
-## What it cannot see
+| Token type | Weight |
+| --- | ---: |
+| Input | 1.0 |
+| Cache write | 1.25 |
+| Cache read | 0.1 |
+| Output | 5.0 |
 
-Claude Code writes only main-thread API calls. Subagent and `Workflow` traffic
-is billed to the session but appears in no transcript — there are no
-`isSidechain` records anywhere in the tree and no usage records outside
-`projects/`. Short background calls (title generation, classifiers) are absent
-too.
+This measure reflects the relative token prices used by the tool. It is not a
+provider invoice.
 
-Measured against Claude's own `cost-state` across 89 closed sessions: ordinary
-sessions under-report by a median of **4%**; sessions that fan out to subagents
-by **22-99%**. `burn verify` shows the current split, and `⑂` marks affected
-sessions in the live view.
+`burn tools` reports two related values:
 
-Codex has no such gap: summing each `token_count` event's `last_token_usage`
-reproduces the session's reported `total_token_usage` exactly.
+- `ADDED` is context growth associated with a tool result.
+- `CARRIED` is the later cost of reading that context again.
+
+## Cost estimates
+
+Claude Code records cost data when a session closes. `burn cost` uses sessions
+whose observed tokens reconcile with that data to calculate an effective rate
+for each model.
+
+Codex transcript records contain token counts but no cost. `burn` therefore
+does not report a Codex dollar amount.
+
+The Claude meter is a clock-based estimate unless you provide an allowance:
+
+```sh
+burn --limit 40e6
+```
+
+The value is a five-hour weighted-token allowance. The Codex meter uses the
+percentages recorded by Codex.
+
+## Limits
+
+The transcript is not a complete billing record.
+
+Claude Code can bill subagent and background work that does not appear in its
+main transcript. `burn verify` shows the difference between observed and
+Claude's recorded totals. Sessions that use `Task`, `Agent`, or `Workflow`
+may have a larger difference.
+
+Codex token totals are read from its `token_count` records. The tool does not
+infer costs that Codex does not record.
+
+## Requirements
+
+- Python 3.13 or later
+- `uv`
+- A terminal that supports the live view
+
+The only runtime Python dependency is `rich`.
