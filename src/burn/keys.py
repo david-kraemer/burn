@@ -116,11 +116,11 @@ def command(key: str, view: View, table: Sequence[Row]) -> View | None:
 
 
 def step(view: View, table: Sequence[Row], by: int) -> str | None:
-    """Return the selected session rows, clamped to the table."""
+    """Return the selected row's key, clamped to the table."""
     if not table:
         return None
     at = min(max(cursor(view, list(table)) + by, 0), len(table) - 1)
-    return table[at].session
+    return table[at].key
 
 
 def cycle(sort: str, by: int) -> str:

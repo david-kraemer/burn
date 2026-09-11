@@ -10,6 +10,7 @@ so there is no state to synchronise.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import os
 import sys
 import termios
@@ -41,12 +42,14 @@ async def monitor(console: Console, view: View) -> None:
             sampling: asyncio.Task[Snapshot] | None = None
             waiting: asyncio.Task[str] | None = None
             due = time.monotonic() + view.interval
+            resample_now = False
             try:
                 while True:
                     live.update(dashboard(snapshot, view, console.size.height), refresh=True)
                     now = time.monotonic()
-                    if sampling is None and not view.paused and now >= due:
+                    if sampling is None and not view.paused and (resample_now or now >= due):
                         sampling = asyncio.create_task(tailer.sample(view.window))
+                        resample_now = False
                     if waiting is None:
                         waiting = asyncio.create_task(pressed.get())
 
@@ -70,7 +73,15 @@ async def monitor(console: Console, view: View) -> None:
                         if updated is None:
                             return
                         if updated.window != view.window:
-                            due = 0.0  # read older files for a wider window
+                            # Read older files for a wider window. A `due`
+                            # deadline can't carry this alone: if the old
+                            # window's sample is still in flight, its
+                            # completion resets `due` to the next ordinary
+                            # tick and would silently swallow the request.
+                            # This flag survives that reset and forces the
+                            # resample on the first iteration where a sample
+                            # isn't already running.
+                            resample_now = True
                         view = updated
             finally:
                 for task in (sampling, waiting):
@@ -89,13 +100,18 @@ async def keyboard() -> AsyncIterator[asyncio.Queue[str]]:
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     loop = asyncio.get_running_loop()
+    # A multi-byte UTF-8 character (pasted text, a non-ASCII filter query) can
+    # arrive split across two reads. An incremental decoder holds the partial
+    # tail back until the rest lands, instead of decoding each read in
+    # isolation and turning the split-off bytes into "replace" mojibake.
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
     def readable() -> None:
         try:
             data = os.read(fd, 1024)
         except OSError:
             return
-        for key in split(data.decode("utf-8", "replace")):
+        for key in split(decoder.decode(data)):
             queue.put_nowait(key)
 
     try:

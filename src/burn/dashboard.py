@@ -1,7 +1,8 @@
 """Render the live screen from a snapshot and view state.
 
-Nothing here mutates either argument. The same pair always renders the
-same frame. So a regression shows up as a string comparison.
+Nothing here mutates either argument. Given the same pair, every line but
+the masthead's live wall clock renders identically, so a regression still
+shows up as a string comparison over everything else in the frame.
 """
 
 from __future__ import annotations
@@ -98,14 +99,19 @@ def claude_meter(snapshot: Snapshot, view: View) -> Text:
     money = sum(dollars(c) for c in inside)
     elapsed = snapshot.at - start
     left = max(BLOCK - elapsed, 0.0)
-    # Without a quota, track elapsed time unless the user supplied a limit.
     if view.limit:
-        fraction, tail = spent / view.limit, f"{quantity(spent)}/{quantity(view.limit)}"
+        # The bar tracks tokens spent against the allowance.
+        fraction, style = spent / view.limit, "cyan"
+        tail = f"{quantity(spent)}/{quantity(view.limit)}"
     else:
-        fraction, tail = elapsed / BLOCK, quantity(spent)
+        # No allowance to measure against, so the bar can only track time
+        # elapsed through the block, not tokens. Dim it and say so: a
+        # filled bar otherwise reads as a quota meter it isn't.
+        fraction, style = elapsed / BLOCK, "dim"
+        tail = f"{quantity(spent)} spent, no --limit set"
     return Text.assemble(
         ("Claude 5h ", "cyan"),
-        meter(fraction, METER_WIDTH),
+        meter(fraction, METER_WIDTH, style),
         f" {tail}",
         (f" →{quantity(projected(spent, elapsed, left))}", "dim"),
         (f"  ${money:.2f}→${projected(money, elapsed, left):.2f}" if money else ""),
@@ -149,7 +155,7 @@ def sessions(shown: list[Row], view: View, now: float, at: int, offset: int) -> 
     """Render the session table with selection and sort indicators."""
     table = Table(box=None, pad_edge=False, collapse_padding=True, header_style="bold")
     table.add_column(" ", width=1, no_wrap=True)
-    for name, width in (("SRC", 3), ("SESSION", 9), ("PROJECT", 10), ("MODEL", 9)):
+    for name, width in (("SRC", 3), ("SESSION", 13), ("PROJECT", 10), ("MODEL", 9)):
         table.add_column(heading(name, view), width=width, no_wrap=True)
     for name, width in (("CTX", 6), ("HIT", 5), ("THINK", 6), ("WEIGHT", 7), ("RATE", 6), ("$", 5)):
         table.add_column(heading(name, view), width=width, justify="right", no_wrap=True)
@@ -205,7 +211,18 @@ def zoom(snapshot: Snapshot, view: View, table: list[Row], at: int) -> Renderabl
     )
     if not picked.calls:
         return Text(f"  {chosen}: no calls in this window", style="dim")
-    return views.turns(picked, 6) if view.panel != TOOLS else views.tools(picked, 6)
+    detail = views.turns(picked, 6) if view.panel != TOOLS else views.tools(picked, 6)
+    # The pane is keyed by session, not by Row.key: a session that moved
+    # between project directories tabulates into one row per project (see
+    # Row.key), but attribution needs the whole, unbroken call sequence to
+    # get cache-carry math right, so it's pulled in regardless of which of
+    # those rows the user actually selected. Say so, or the projects named
+    # here can look like the wrong session was opened.
+    projects = {c.project for c in picked.calls}
+    if len(projects) > 1:
+        note = Text(f"  spans projects: {', '.join(sorted(projects))}", style="yellow")
+        return Group(note, Text(""), detail)
+    return detail
 
 
 def helpscreen() -> RenderableType:
@@ -224,8 +241,8 @@ def helpscreen() -> RenderableType:
             "  Columns: CTX is the current context size. HIT is the share of\n"
             "  input served from cache. THINK is reasoning tokens. WEIGHT is\n"
             "  tokens in input-token equivalents. RATE is the weighted burn\n"
-            "  over five minutes. ⑂ marks a session that fanned out to\n"
-            "  subagents.",
+            "  per minute, averaged over the last five minutes. ⑂ marks a\n"
+            "  session that fanned out to subagents.",
             style="dim",
         ),
     )

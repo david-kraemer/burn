@@ -33,24 +33,24 @@ def test_an_unbound_key_changes_nothing(snapshot, call):
 def test_moving_down_selects_the_next_row(snapshot, call):
     rows = table(snapshot, call)
     moved = press(View(), rows, "j")
-    assert moved.selected == rows[1].session
+    assert moved.selected == rows[1].key
     assert cursor(moved, rows) == 1
 
 
 def test_the_cursor_stops_at_both_ends(snapshot, call):
     rows = table(snapshot, call)
-    assert press(View(), rows, "k", "k").selected == rows[0].session
-    assert press(View(), rows, *"jjjjj").selected == rows[-1].session
+    assert press(View(), rows, "k", "k").selected == rows[0].key
+    assert press(View(), rows, *"jjjjj").selected == rows[-1].key
 
 
 def test_arrow_keys_move_like_j_and_k(snapshot, call):
     rows = table(snapshot, call)
-    assert press(View(), rows, "\x1b[B").selected == rows[1].session
-    assert press(View(), rows, "\x1b[B", "\x1b[A").selected == rows[0].session
+    assert press(View(), rows, "\x1b[B").selected == rows[1].key
+    assert press(View(), rows, "\x1b[B", "\x1b[A").selected == rows[0].key
 
 
 def test_the_selection_follows_its_session_when_the_sort_flips(snapshot, call):
-    # This is why the selection is a session id and not a row index: reversing
+    # This is why the selection is a row key and not a row index: reversing
     # the sort must not slide the cursor onto a different session.
     rows = table(snapshot, call)
     view = press(View(), rows, "j")
@@ -67,8 +67,25 @@ def test_moving_in_an_empty_table_selects_nothing():
 def test_enter_toggles_the_zoom_pane(snapshot, call):
     rows = table(snapshot, call)
     zoomed = press(View(), rows, "\r")
-    assert zoomed.zoomed and zoomed.selected == rows[0].session
+    assert zoomed.zoomed and zoomed.selected == rows[0].key
     assert not press(zoomed, rows, "\r").zoomed
+
+
+def test_a_session_split_across_projects_does_not_trap_the_cursor(snapshot, call):
+    # A session recorded under two projects (cwd changed mid-conversation)
+    # tabulates into two rows sharing one session id. The cursor must not
+    # get stuck bouncing off the first of the pair forever.
+    calls = [
+        call(session="dup", project="proja", usage=Usage(input=20)),
+        call(session="dup", project="projb", usage=Usage(input=10)),
+        call(session="solo", project="projc", usage=Usage(input=5)),
+    ]
+    rows = sorted(tabulate(snapshot(calls=calls)), key=lambda r: -r.weight)
+    assert len({r.session for r in rows}) == 2  # "dup" appears twice
+    view = View()
+    for _ in range(len(rows) - 1):
+        view = apply("j", view, rows)
+    assert cursor(view, rows) == len(rows) - 1
 
 
 def test_t_swaps_the_zoom_pane(snapshot, call):

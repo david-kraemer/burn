@@ -44,8 +44,8 @@ def free_rates(monkeypatch, tmp_path):
     """Keep every test off the real billing cache and the real transcript tree."""
     from burn import analysis
 
-    analysis.rates.cache_clear()
+    analysis._rates_within.cache_clear()
     monkeypatch.setattr(analysis, "RATES_CACHE", tmp_path / "rates.json")
     monkeypatch.setattr(analysis, "CLAUDE_ROOT", tmp_path / "empty")
     yield
-    analysis.rates.cache_clear()
+    analysis._rates_within.cache_clear()

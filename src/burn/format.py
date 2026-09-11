@@ -4,21 +4,32 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from itertools import pairwise
 
 SPARK = "▁▂▃▄▅▆▇█"
 
 
 def quantity(value: float) -> str:
     """Format a token count with three significant figures."""
-    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+    tiers = ((1e9, "B"), (1e6, "M"), (1e3, "k"))
+    for index, (limit, suffix) in enumerate(tiers):
         if abs(value) >= limit:
-            return f"{value / limit:.1f}{suffix}"
+            scaled = round(value / limit, 1)
+            # Rounding a value like 999,999 can push it to "1000.0" in its own
+            # tier (here "k") instead of over to "1.0M": re-scale into the
+            # next tier up so the three-significant-figure contract holds
+            # right at every unit boundary.
+            if abs(scaled) >= 1000 and index > 0:
+                limit, suffix = tiers[index - 1]
+                scaled = value / limit
+            return f"{scaled:.1f}{suffix}"
     return f"{value:.0f}"
 
 
 def span(seconds: float) -> str:
     """Format a duration as days, hours, minutes, or seconds."""
-    minutes = int(max(seconds, 0) // 60)
+    seconds = max(seconds, 0)
+    minutes = int(seconds // 60)
     days, rest = divmod(minutes, 1440)
     hours, mins = divmod(rest, 60)
     if days:
@@ -30,7 +41,7 @@ def span(seconds: float) -> str:
 
 def clock(epoch: float | None) -> str:
     """Format a Unix timestamp in local time."""
-    return f"{datetime.fromtimestamp(epoch, UTC).astimezone():%H:%M}" if epoch else "?"
+    return f"{datetime.fromtimestamp(epoch, UTC).astimezone():%H:%M}" if epoch is not None else "?"
 
 
 def moment(text: str | None) -> float | None:
@@ -52,12 +63,27 @@ def label(model: str) -> str:
 
 def trim(text: str, width: int) -> str:
     """Clip text to ``width`` and add an ellipsis when needed."""
-    return text if len(text) <= width else text[: width - 1] + "…"
+    if len(text) <= width:
+        return text
+    if width <= 0:
+        return ""
+    return text[: width - 1] + "…"
 
 
 def short(identifier: str) -> str:
-    """Shorten a session ID while retaining its useful prefix."""
-    return identifier[:8]
+    """Shorten a session ID while retaining its useful prefix.
+
+    This is a grouping key throughout burn (attribution, cache waste,
+    table rows), not only a display string, so it needs real collision
+    resistance, not just brevity. Session ids are UUIDs; an 8-character
+    prefix carries only the first ~32 bits of a UUID4's randomness, and by
+    the birthday bound a busy user accumulating tens of thousands of
+    sessions has a genuine chance of two colliding onto the same short id
+    and silently merging into one row. 12 characters pushes that point out
+    past any realistic session count; the table column truncates further
+    for display regardless (see dashboard.sessions' fixed-width column).
+    """
+    return identifier[:12]
 
 
 def tint(percent: float) -> str:
@@ -81,5 +107,9 @@ def resample(series: list[float], width: int) -> list[float]:
     if width <= 0 or len(series) <= width:
         return series
     step = len(series) / width
-    buckets = ((int(i * step), int((i + 1) * step)) for i in range(width))
-    return [sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1) for lo, hi in buckets]
+    # The last edge is `len(series)`, not `round(width * step)`: float drift
+    # in that product can round down by one, silently dropping the series'
+    # final (often most significant, e.g. most recent) point from every
+    # bucket.
+    edges = [round(i * step) for i in range(width)] + [len(series)]
+    return [sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1) for lo, hi in pairwise(edges)]

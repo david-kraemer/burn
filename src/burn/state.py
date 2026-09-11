@@ -4,10 +4,13 @@
 one. So the whole interactive surface is a function from (key, view) to
 view, and a test can check it one keystroke at a time.
 
-The selection is a session id, not a row index. Sorting, filtering, and
+The selection is a row key, not a row index. Sorting, filtering, and
 the window all reorder or shorten the table under the cursor. Naming the
-selection by session keeps it on the same session instead of sliding onto
-a neighbour. Nothing ever needs clamping back into range.
+selection by key keeps it on the same row instead of sliding onto a
+neighbour. Nothing ever needs clamping back into range. The key is more
+than the session id: a session that moved between project directories
+tabulates into one row per project, and the session id alone would not
+tell those rows apart.
 """
 
 from __future__ import annotations
@@ -74,7 +77,7 @@ def rows(view: View, snapshot: Snapshot) -> list[Row]:
 def cursor(view: View, table: list[Row]) -> int:
     """The current selection, starting at the first row."""
     for index, row in enumerate(table):
-        if row.session == view.selected:
+        if row.key == view.selected:
             return index
     return 0
 

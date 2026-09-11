@@ -28,6 +28,60 @@ LIVE = "live"
 VIEWS = (LIVE, "tools", "turns", "session", "cost", "waste", "verify")
 
 
+def positive(kind: type, text: str, noun: str) -> int | float:
+    """Parse a flag value, rejecting zero or negative numbers."""
+    value = kind(text)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive {noun}")
+    return value
+
+
+def positive_minutes(text: str) -> int:
+    """Parse ``--window``, rejecting zero or negative durations.
+
+    A non-positive window silently turns into a cutoff in the future
+    (``Snapshot.since`` would look for calls at or after ``now + |window|``),
+    which always renders an empty view with no indication the flag was
+    invalid.
+    """
+    return positive(int, text, "number of minutes")
+
+
+def positive_seconds(text: str) -> float:
+    """Parse ``--interval``, rejecting zero or negative durations.
+
+    A non-positive interval never lets the live loop's next-sample deadline
+    land in the future, so it re-sweeps every transcript as fast as the loop
+    can spin instead of on the requested cadence.
+    """
+    return positive(float, text, "number of seconds")
+
+
+def positive_count(text: str) -> int:
+    """Parse ``--top``, rejecting zero or negative counts.
+
+    ``views.tools``/``views.turns`` slice their ranked rows with ``[:top]``;
+    a negative ``top`` is valid Python ("drop the last |top| rows") but not
+    the intended "show the top N", so it must be rejected rather than
+    silently doing something else.
+    """
+    return positive(int, text, "count")
+
+
+def non_negative_limit(text: str) -> float:
+    """Parse ``--limit``, rejecting negative allowances.
+
+    ``0.0`` is the sentinel for "no allowance set" (falsy: ``claude_meter``
+    falls back to a time-only meter). A negative value is truthy, so it
+    would be accepted as a real allowance and silently divide the spent
+    total by a negative number into a meaningless negative fraction.
+    """
+    value = float(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must not be negative")
+    return value
+
+
 def parser() -> argparse.ArgumentParser:
     spec = argparse.ArgumentParser(
         prog="burn",
@@ -36,18 +90,24 @@ def parser() -> argparse.ArgumentParser:
     )
     spec.add_argument("view", nargs="?", default=LIVE, choices=VIEWS)
     spec.add_argument("target", nargs="?", help="session ID prefix")
-    spec.add_argument("--window", type=int, default=300, help="history in minutes (default: 300)")
-    spec.add_argument("--interval", type=float, default=2.0, help="refresh interval in seconds")
+    spec.add_argument(
+        "--window", type=positive_minutes, default=300, help="history in minutes (default: 300)"
+    )
+    spec.add_argument(
+        "--interval", type=positive_seconds, default=2.0, help="refresh interval in seconds"
+    )
     spec.add_argument(
         "--limit",
-        type=float,
+        type=non_negative_limit,
         default=0.0,
         help="five-hour Claude allowance in weighted tokens (accepts 40e6)",
     )
     spec.add_argument("--sort", default="weight", choices=[field for field, _ in SORTS])
     spec.add_argument("--once", action="store_true", help="print one live-view frame and exit")
     spec.add_argument("--source", choices=["cc", "cx"], help="show one agent only")
-    spec.add_argument("--top", type=int, default=15, help="rows in detail views (default: 15)")
+    spec.add_argument(
+        "--top", type=positive_count, default=15, help="rows in detail views (default: 15)"
+    )
     return spec
 
 
@@ -60,10 +120,18 @@ def main(argv: list[str] | None = None) -> None:
         sort=args.sort,
         source=args.source,
     )
-    if args.view == LIVE and not args.once:
-        asyncio.run(monitor(Console(), view))
-        return
-    asyncio.run(report(args, view))
+    try:
+        if args.view == LIVE and not args.once:
+            asyncio.run(monitor(Console(), view))
+            return
+        asyncio.run(report(args, view))
+    except KeyboardInterrupt:
+        # keys.QUIT lists "\x03" alongside "q" as a graceful-quit keystroke,
+        # but cbreak mode (unlike raw mode) leaves ISIG enabled, so a real
+        # terminal delivers Ctrl-C as SIGINT/KeyboardInterrupt, never as that
+        # byte in the input stream. Quit exactly as "q" would rather than
+        # let the interrupt escape as a traceback.
+        pass
 
 
 async def report(args: argparse.Namespace, view: View) -> None:

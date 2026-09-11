@@ -43,8 +43,8 @@ def busy(snapshot, call, tool):
     lambda s: views.waste(s),
     lambda s: dashboard(s, View()),
     lambda s: dashboard(s, View(mode=HELP)),
-    lambda s: dashboard(s, View(zoomed=True, selected="aaa")),
-    lambda s: dashboard(s, View(zoomed=True, panel=TURNS, selected="aaa")),
+    lambda s: dashboard(s, View(zoomed=True, selected="cc|aaa|burn")),
+    lambda s: dashboard(s, View(zoomed=True, panel=TURNS, selected="cc|aaa|burn")),
     lambda s: dashboard(s, View(source="cx")),
     lambda s: dashboard(s, View(needle="nothing matches")),
     lambda s: dashboard(s, View(limit=4e7)),
@@ -95,7 +95,7 @@ def test_a_fan_out_session_is_marked(snapshot, call):
 
 
 def test_the_zoom_pane_reports_a_session_with_nothing_in_the_window(busy):
-    frame = plain(dashboard(busy, View(zoomed=True, selected="aaa", window=0)))
+    frame = plain(dashboard(busy, View(zoomed=True, selected="cc|aaa|burn", window=0)))
     assert "no session selected" in frame or "no calls in this window" in frame
 
 

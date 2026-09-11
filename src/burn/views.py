@@ -52,7 +52,8 @@ def tools(snapshot: Snapshot, top: int = 15) -> RenderableType:
         table,
         Text(""),
         Text(
-            "ADDED is context added by the tool. CARRIED is its later re-read cost.",
+            "ADDED is context added by the tool. CARRIED is the weighted cost of "
+            "caching it once plus every later re-read.",
             style="dim",
         ),
     )
@@ -68,11 +69,13 @@ def turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
         return Text("No prompts captured in this window.", style="dim")
 
     table = columns(
-        [("WHEN", 5), ("SESSION", 8)], [("CALLS", 5), ("WEIGHT", 7), ("COST", 6)]
+        [("WHEN", 5), ("SESSION", 12)], [("CALLS", 5), ("WEIGHT", 7), ("COST", 6)]
     )
     table.add_column("PROMPT", width=38, no_wrap=True)
 
-    ranked = sorted(grouped.items(), key=lambda kv: -sum(c.weight for c in kv[1]))
+    # "Most expensive" means dollars, not raw tokens: a heavily-used cheap
+    # model can outweigh a pricier one in tokens while costing less.
+    ranked = sorted(grouped.items(), key=lambda kv: -sum(analysis.dollars(c) for c in kv[1]))
     for (session, prompt), items in ranked[:top]:
         cost = sum(analysis.dollars(c) for c in items)
         table.add_row(
@@ -187,7 +190,7 @@ def waste(snapshot: Snapshot) -> RenderableType:
                   f"followed a gap longer than {span(CACHE_TTL)}", style="dim")),
     ])
 
-    tiers = columns([("SESSION", 10)], [("5m TIER", 9), ("1h TIER", 9), ("IDLE RESUMES", 13)])
+    tiers = columns([("SESSION", 12)], [("5m TIER", 9), ("1h TIER", 9), ("IDLE RESUMES", 13)])
     grouped = analysis.sessions(snapshot.calls)
     ranked = sorted(
         ((name, items) for name, items in grouped.items()
@@ -223,26 +226,37 @@ def audit(threshold: float = 15.0) -> RenderableType:
     if not found:
         return Text("No closed sessions with cost-state records yet.", style="dim")
 
-    table = columns([("SESSION", 10)], [("OBSERVED", 9), ("BILLED", 9), ("UNSEEN", 7)])
+    table = columns([("SESSION", 12)], [("OBSERVED", 9), ("BILLED", 9), ("UNSEEN", 7)])
     table.add_column("LIKELY CAUSE", width=24, no_wrap=True)
-    for entry in sorted(found, key=lambda r: -r.unseen):
-        if entry.unseen < threshold:
+    # `unseen` runs both ways: positive means burn saw fewer tokens than
+    # Claude billed (fan-out, background calls); negative means burn saw
+    # *more* than was billed, which points at burn's own weighting, not a
+    # missing-call explanation. Rank and filter by magnitude so a large
+    # discrepancy in either direction gets surfaced, not just shortfalls.
+    for entry in sorted(found, key=lambda r: -abs(r.unseen)):
+        if abs(entry.unseen) < threshold:
             continue
+        cause = (
+            ("fan-out (Task/Workflow)" if entry.fanout else "background calls")
+            if entry.unseen > 0
+            else "burn overcounts vs. billed"
+        )
         table.add_row(
             entry.session,
             quantity(entry.observed),
             quantity(entry.billed),
-            Text(f"{entry.unseen:.0f}%", style=tint(entry.unseen)),
-            "fan-out (Task/Workflow)" if entry.fanout else "background calls",
+            Text(f"{entry.unseen:.0f}%", style=tint(abs(entry.unseen))),
+            cause,
         )
 
     gaps = sorted(entry.unseen for entry in found)
+    worst = max(gaps, key=abs)
     return Group(
         table,
         Text(""),
         Text(
             f"{len(gaps)} closed sessions · median unseen {gaps[len(gaps) // 2]:.1f}% "
-            f"· worst {gaps[-1]:.0f}%",
+            f"· worst {worst:.0f}%",
             style="bold",
         ),
     )

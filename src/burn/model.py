@@ -150,6 +150,18 @@ class Row:
     last: float
     fanout: bool
 
+    @property
+    def key(self) -> str:
+        """Identify this row across renders.
+
+        The session id alone is not unique: a session that moved between
+        project directories (a ``cd`` mid-conversation) tabulates into one
+        row per project, all sharing the same session id. Selection must
+        key on the full grouping, or the cursor can lock onto a row it can
+        never distinguish from its neighbour.
+        """
+        return f"{self.source}|{self.session}|{self.project}"
+
 
 def compactions(calls: Iterable[Call]) -> int:
     """Count context compactions."""

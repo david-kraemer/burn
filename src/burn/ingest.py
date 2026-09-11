@@ -29,9 +29,6 @@ TREES = (
     (CODEX_ROOT, CODEX, "*/*/*/rollout-*.jsonl"),
 )
 
-# Keep sessions beyond the visible window so a wider view can reuse them.
-GRACE = 3600
-
 
 @dataclass(frozen=True, slots=True)
 class Fragment:
@@ -77,7 +74,14 @@ class Tailer:
         for path, offset, fragment in await asyncio.to_thread(self._read, horizon):
             self._offsets[path] = offset
             self._absorb(fragment)
-        self._forget(now - max(window, 300) * 60 - GRACE)
+        # Retain double the visible window: a file already being tailed only
+        # ever grows by new appended lines, so once its earlier content is
+        # forgotten here it can never be re-read from disk (the byte offset
+        # has already moved past it). The "+"/"-" keys double or halve the
+        # window one step at a time, so keeping 2x means a single widen
+        # always finds its data already retained, matching what "a wider
+        # view can reuse them" promises.
+        self._forget(now - max(window, 300) * 60 * 2)
         return Snapshot(
             at=now,
             calls=tuple(sorted(self._calls.values(), key=lambda c: c.at)),
@@ -89,7 +93,14 @@ class Tailer:
         """Read files in a worker thread."""
         found = []
         for path, source in transcripts(horizon):
-            lines, offset = tail(path, self._offsets.get(path, 0))
+            stored = self._offsets.get(path, 0)
+            if rewritten(path, stored):
+                # tail() is about to restart this file from byte zero. Its
+                # Carry (pending tool ids, current prompt/model/project) was
+                # built from the file's old content and must not bleed into
+                # the new content read from the start.
+                self._carry.pop(path, None)
+            lines, offset = tail(path, stored)
             if lines:
                 found.append((path, offset, parse(lines, source, self._carry_for(path, source))))
         return found
@@ -206,7 +217,14 @@ def read_codex(records: Iterable[dict], carry: Carry) -> Fragment:
         at = moment(record.get("timestamp")) or 0.0
         match record.get("type"):
             case "session_meta":
-                carry.session = short(payload.get("session_id") or carry.session)
+                # Not `carry.session = short(payload.get("session_id") or ...)`:
+                # a sub-agent's own rollout file reports its *parent's*
+                # thread id here, not its own, which would silently fold
+                # the sub-agent's calls into the parent session's row and
+                # corrupt attribution (threads() would splice an unrelated
+                # prefix sequence into the parent's). `_carry_for` already
+                # seeded `carry.session` from this file's own filename,
+                # which is unique per file regardless of parent/child.
                 carry.project = Path(payload.get("cwd") or carry.project).name
             case "turn_context":
                 carry.model = payload.get("model") or carry.model
@@ -311,6 +329,14 @@ def transcripts(horizon: float) -> list[tuple[Path, str]]:
     return found
 
 
+def rewritten(path: Path, offset: int) -> bool:
+    """Whether ``path`` has shrunk below ``offset`` (rewritten or rotated)."""
+    try:
+        return path.stat().st_size < offset
+    except OSError:
+        return False
+
+
 def tail(path: Path, offset: int) -> tuple[list[str], int]:
     """Read complete lines after ``offset`` and return the new offset."""
     try:
@@ -330,7 +356,12 @@ def tail(path: Path, offset: int) -> tuple[list[str], int]:
     end = blob.rfind(b"\n")
     if end < 0:  # Wait for the rest of a partial line.
         return [], offset
-    return blob[:end].decode("utf-8", "replace").splitlines(), offset + end + 1
+    # JSONL uses "\n" as its sole record separator. str.splitlines() also
+    # breaks on \r, \v, \f, U+2028, U+2029 and NEL -- all legal *unescaped*
+    # inside a JSON string -- so a prompt or tool output containing one of
+    # those would be split into two fragments, each invalid JSON, and the
+    # whole record silently dropped by decode()'s parse-error handling.
+    return blob[:end].decode("utf-8", "replace").split("\n"), offset + end + 1
 
 
 def records(path: Path) -> Iterator[dict]:

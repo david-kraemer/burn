@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 
 from rich.table import Table
@@ -12,7 +13,7 @@ Column = tuple[str, int]
 
 def meter(fraction: float, width: int, style: str = "cyan") -> Text:
     """Render a bracket meter."""
-    filled = max(0, min(width, round(fraction * width)))
+    filled = clamp(fraction * width, width)
     return Text.assemble(
         ("[", "dim"), ("|" * filled, style), (" " * (width - filled), ""), ("]", "dim")
     )
@@ -20,8 +21,21 @@ def meter(fraction: float, width: int, style: str = "cyan") -> Text:
 
 def bar(percent: float, width: int = 8) -> str:
     """Render a proportion bar for a table cell."""
-    filled = min(width, max(0, round(percent / 100 * width)))
+    filled = clamp(percent / 100 * width, width)
     return "█" * filled + "░" * (width - filled)
+
+
+def clamp(value: float, width: int) -> int:
+    """Round a fill amount into ``[0, width]``, treating NaN/inf as empty.
+
+    Upstream data (a malformed rate-limit event, a corrupted transcript
+    record) can hand a bar a non-finite fraction. `round()` raises on NaN
+    and infinity, which would crash the whole live redraw loop over one bad
+    value rather than just drawing an empty bar for it.
+    """
+    if not math.isfinite(value):
+        return 0
+    return max(0, min(width, round(value)))
 
 
 def grid(rows: Iterable[tuple[str, object]]) -> Table:

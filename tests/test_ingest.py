@@ -10,7 +10,7 @@ def claude_assistant(**overrides):
     record = {
         "type": "assistant",
         "timestamp": "2026-09-11T12:00:00Z",
-        "sessionId": "session-one",
+        "sessionId": "session-one-two-three",
         "cwd": "/home/d/projects/burn",
         "requestId": "r1",
         "message": {
@@ -35,7 +35,7 @@ def test_claude_call_carries_usage_project_and_session():
     (_, call), = fragment.calls
     assert call.usage.input == 10
     assert call.usage.cache_read == 30
-    assert call.session == "session-"
+    assert call.session == "session-one-"
     assert call.project == "burn"
 
 

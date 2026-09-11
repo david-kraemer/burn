@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -114,6 +113,17 @@ class Blame:
 PROMPT = "(prompt / system)"
 
 
+@dataclass(frozen=True, slots=True)
+class Growth:
+    """One thread's growth step, pending its tool assignment."""
+
+    start: float
+    end: float
+    growth: float
+    carry: float
+    model: str
+
+
 def attribution(calls: Iterable[Call], tooling: Iterable[Tooling]) -> list[Blame]:
     """Assign context growth and later read cost to its tools.
 
@@ -125,30 +135,60 @@ def attribution(calls: Iterable[Call], tooling: Iterable[Tooling]) -> list[Blame
     totals: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])
 
     for session, items in sessions(calls).items():
-        series = events.get(session, [])
-        stamps = [event.at for event in series]
-        for strand in threads(items):
-            for index, (previous, call) in enumerate(pairwise(strand)):
-                # The result is cached once and read by later calls in this
-                # thread. A compaction starts a new thread.
-                carry = CACHE_WRITE_WEIGHT + CACHE_READ_WEIGHT * max(len(strand) - index - 2, 0)
-                # Growth is new context, less the model's output.
-                growth = call.prefix - previous.prefix - previous.usage.output
-                if growth <= 0:
-                    continue
-                lo = bisect_right(stamps, previous.at)
-                hi = bisect_right(stamps, call.at)
-                between = series[lo:hi]
-                rate = per_token_cost(call.model)
-                for name, portion in shares(between, growth):
-                    row = totals[name]
-                    row[0] += portion
-                    row[1] += 1
-                    row[2] += portion * carry
-                    row[3] += portion * carry * rate
+        steps = list(growths(items))
+        for step, between in zip(steps, assign(steps, events.get(session, [])), strict=True):
+            rate = per_token_cost(step.model)
+            for name, portion in shares(between, step.growth):
+                row = totals[name]
+                row[0] += portion
+                row[1] += 1
+                row[2] += portion * step.carry
+                row[3] += portion * step.carry * rate
 
     blamed = [Blame(name, a, int(n), c, d) for name, (a, n, c, d) in totals.items()]
     return sorted(blamed, key=lambda b: -b.carried)
+
+
+def growths(items: Sequence[Call]) -> Iterator[Growth]:
+    """Every positive growth step across a session's threads.
+
+    A session that ran concurrent threads (a compaction, or Codex's side
+    threads under one session id) has threads whose spans overlap in wall
+    time. Each step is kept as its own interval so a tool result can be
+    matched to the one thread it actually happened in, not to every thread
+    whose span happens to contain that moment.
+    """
+    for strand in threads(items):
+        for index, (previous, call) in enumerate(pairwise(strand)):
+            # The result is cached once and read by later calls in this
+            # thread. A compaction starts a new thread.
+            carry = CACHE_WRITE_WEIGHT + CACHE_READ_WEIGHT * max(len(strand) - index - 2, 0)
+            # Growth is new context, less the model's output.
+            growth = call.prefix - previous.prefix - previous.usage.output
+            if growth > 0:
+                yield Growth(previous.at, call.at, growth, carry, call.model)
+
+
+def assign(steps: Sequence[Growth], series: Sequence[Tooling]) -> list[list[Tooling]]:
+    """Match each tool result to the narrowest step whose span contains it.
+
+    Overlapping threads can have several steps whose ``(start, end]`` spans
+    all contain one tool result's timestamp; crediting it to every one of
+    them would multiply-count both its context and its dollar cost. The
+    narrowest containing span is the thread that was actually running when
+    the tool returned, so only it gets the credit.
+    """
+    between: list[list[Tooling]] = [[] for _ in steps]
+    for event in series:
+        best = None
+        for index, step in enumerate(steps):
+            if step.start < event.at <= step.end and (
+                best is None or step.end - step.start < steps[best].end - steps[best].start
+            ):
+                best = index
+        if best is not None:
+            between[best].append(event)
+    return between
 
 
 def shares(between: Sequence[Tooling], growth: float) -> Iterator[tuple[str, float]]:
@@ -235,12 +275,27 @@ def projected(spent: float, elapsed: float, remaining: float) -> float:
 # ------------------------------------------------------------------- billing
 
 
-@cache
 def rates() -> Mapping[str, tuple[float, int]]:
     """Calculate dollars per weighted megatoken for each model.
 
     Use closed Claude sessions whose observed and billed totals match.
     Exclude sessions with unrecorded subagent traffic.
+    """
+    return _rates_within(int(time.time() // RATES_TTL))
+
+
+@cache
+def _rates_within(epoch: int) -> Mapping[str, tuple[float, int]]:
+    """Solve rates, memoised for one ``RATES_TTL``-wide slice of time.
+
+    ``rates`` is called once per rendered call in a long-lived live
+    dashboard, so the result has to stay memoised in-process. But keying
+    the cache on nothing (as a bare ``@cache`` would) freezes the answer for
+    the process's entire lifetime, defeating ``RATES_CACHE``'s whole point:
+    a dashboard left running for a day never sees an on-disk cache refreshed
+    by another ``burn`` invocation, or a rate solved from newly-closed
+    sessions. Bucketing the cache key by TTL-sized epoch makes it expire on
+    schedule even though it never receives an explicit clear.
     """
     if (cached := cached_rates()) is not None:
         return cached
@@ -269,9 +324,18 @@ def dollars(call: Call) -> float:
 
 
 def blended_rate() -> float:
-    """Return one average rate for totals spanning models."""
-    solved = [rate for rate, _ in rates().values()]
-    return sum(solved) / len(solved) / 1e6 if solved else 0.0
+    """Return one average rate for totals spanning models.
+
+    Weighted by each model's reconciled session count, not a flat average
+    of per-model rates: an unweighted average lets one rarely-used model
+    (say a cheap Haiku sample or two) drag the "blended" estimate away from
+    what a workload dominated by a pricier model actually costs.
+    """
+    solved = list(rates().values())
+    samples = sum(n for _, n in solved)
+    if not samples:
+        return 0.0
+    return sum(rate * n for rate, n in solved) / samples / 1e6
 
 
 def cached_rates() -> Mapping[str, tuple[float, int]] | None:
@@ -352,12 +416,24 @@ def reconcile(path: Path) -> tuple[float, float, bool]:
 
 
 def billed_models(path: Path) -> Iterator[tuple[str, float, float]]:
-    """Return per-model tokens and dollars from a cost-state record."""
+    """Return per-model tokens and dollars from the final cost-state record.
+
+    A session file can carry several ``cost-state`` checkpoints as its
+    cumulative total is rewritten over time; only the last one reflects the
+    session's true billed total. ``reconcile`` already treats it this way
+    (each new checkpoint replaces ``billed`` rather than adding to it), and
+    this must agree or the rate solver double-counts every checkpointed
+    session's tokens and dollars.
+    """
+    final = None
     for record in records(path):
         if record.get("type") == "cost-state":
-            for model, weight, cost in cost_state(record):
-                if weight > 0 and cost > 0:
-                    yield model, weight, cost
+            final = record
+    if final is None:
+        return
+    for model, weight, cost in cost_state(final):
+        if weight > 0 and cost > 0:
+            yield model, weight, cost
 
 
 def cost_state(record: dict) -> Iterator[tuple[str, float, float]]:
