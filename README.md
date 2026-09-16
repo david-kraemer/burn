@@ -6,6 +6,12 @@ Code and Codex.
 It reads the JSONL transcript files these tools write. It does not
 instrument either tool.
 
+Claude Code does not save quota data in transcript files. `burn` gets this data
+from Anthropic. It uses the OAuth token in the Claude Code login keychain. This
+is the account data shown by `/usage`. Use `--no-remote` to read local files
+only. In this mode, the five-hour meter estimates weighted tokens. Use
+`--limit` to set the allowance for this estimate.
+
 ## Install
 
 Install the command with `uv`:
@@ -50,7 +56,8 @@ Common options:
 --sort <column>       Select the initial sort column.
 --top <number>        Limit rows in detail views. The default is 15.
 --interval <seconds>  Refresh interval for the live view. The default is 2.
---limit <tokens>      Set the Claude five-hour weighted-token allowance.
+--limit <tokens>      Set the local weighted-token allowance.
+--no-remote           Read local transcripts. Skip the quota request.
 --once                Print one live-view frame and exit.
 ```
 
@@ -124,7 +131,9 @@ effective rate for each model.
 Codex transcript records contain token counts but no cost. `burn` therefore
 does not report a Codex dollar amount.
 
-The Claude meter is a clock-based estimate unless you provide an allowance:
+The Claude meter uses reported quota data if available. If remote quota data is
+not available, it uses a five-hour estimate. Use `--limit` to set the
+weighted-token allowance:
 
 ```sh
 burn --limit 40e6
@@ -151,4 +160,4 @@ infer costs that Codex does not record.
 - `uv`
 - A terminal that supports the live view
 
-The only runtime Python dependency is `rich`.
+The runtime Python dependencies are `rich` and `certifi`.

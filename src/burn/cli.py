@@ -17,7 +17,7 @@ from collections.abc import Callable
 
 from rich.console import Console, RenderableType
 
-from . import views
+from . import quota, views
 from .app import monitor
 from .dashboard import dashboard
 from .ingest import Tailer
@@ -81,6 +81,11 @@ def parser() -> argparse.ArgumentParser:
     )
     spec.add_argument("--sort", default="weight", choices=[field for field, _ in SORTS])
     spec.add_argument("--once", action="store_true", help="print one live-view frame and exit")
+    spec.add_argument(
+        "--no-remote",
+        action="store_true",
+        help="read local transcripts; skip the quota request",
+    )
     spec.add_argument("--source", choices=["cc", "cx"], help="show one agent only")
     spec.add_argument(
         "--top", type=positive_count, default=15, help="rows in detail views (default: 15)"
@@ -99,7 +104,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     try:
         if args.view == LIVE and not args.once:
-            asyncio.run(monitor(Console(), view))
+            asyncio.run(monitor(Console(), view, remote=not args.no_remote))
             return
         asyncio.run(report(args, view))
     except KeyboardInterrupt:
@@ -111,7 +116,13 @@ def main(argv: list[str] | None = None) -> None:
 async def report(args: argparse.Namespace, view: View) -> None:
     """Render one snapshot and exit."""
     console = Console()
-    snapshot = await Tailer().sample(args.window)
+    # The live view shows quota meters. It is the only view that requests quota
+    # data.
+    remote = args.view == LIVE and not args.no_remote
+    # A one-shot view has no later frame. If remote quota is enabled, wait for
+    # the request.
+    settle = quota.TIMEOUT if remote else 0.0
+    snapshot = await Tailer(remote=remote).sample(args.window, settle=settle)
     console.print(render(args, view, snapshot, console.size.height))
 
 

@@ -47,7 +47,7 @@ def scripted(monkeypatch):
         monkeypatch.setattr(app, "keyboard", lambda: Keys(keys))
         seen = []
 
-        async def sample(self, window):
+        async def sample(self, window, settle=0.0):
             seen.append(window)
             return sampler(window) if sampler else Snapshot(at=1000.0)
 
@@ -85,7 +85,7 @@ def test_a_sample_in_flight_does_not_block_the_quit_key(monkeypatch):
     monkeypatch.setattr(app, "keyboard", lambda: Keys(["q"]))
     taken = []
 
-    async def sample(self, window):
+    async def sample(self, window, settle=0.0):
         taken.append(window)
         if len(taken) > 1:
             await asyncio.sleep(30)

@@ -66,9 +66,25 @@ def test_the_source_flag_narrows_the_one_shot_views(busy):
 def test_once_prints_a_frame_and_returns(monkeypatch, capsys):
     from burn import cli
 
-    async def sample(self, window):
+    async def sample(self, window, settle=0.0):
         return Snapshot(at=1000.0)
 
     monkeypatch.setattr(cli.Tailer, "sample", sample)
     main(["--once"])
     assert "burn" in capsys.readouterr().out
+
+
+def test_only_live_view_requests_quota(monkeypatch):
+    from burn import cli
+
+    asked = []
+
+    async def sample(self, window, settle=0.0):
+        asked.append((self._remote, settle > 0))
+        return Snapshot(at=1000.0)
+
+    monkeypatch.setattr(cli.Tailer, "sample", sample)
+    main(["--once"])
+    main(["--once", "--no-remote"])
+    main(["waste"])
+    assert asked == [(True, True), (False, False), (False, False)]

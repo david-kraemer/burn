@@ -31,11 +31,13 @@ from .state import View, rows
 CSI = "\x1b["
 
 
-async def monitor(console: Console, view: View) -> None:
+async def monitor(console: Console, view: View, remote: bool = True) -> None:
     """Redraw on a timer or after a keypress."""
-    tailer = Tailer()
+    tailer = Tailer(remote=remote)
     async with keyboard() as pressed:
         # Sample before the alternate screen so the first frame isn't empty.
+        # Do not wait for quota data. Use the cached window shape for meter
+        # height. Add the values after the request completes.
         snapshot = await tailer.sample(view.window)
         with Live(console=console, screen=True, auto_refresh=False) as live:
             sampling: asyncio.Task[Snapshot] | None = None
@@ -79,6 +81,7 @@ async def monitor(console: Console, view: View) -> None:
                             resample_now = True
                         view = updated
             finally:
+                tailer.close()
                 for task in (sampling, waiting):
                     if task is not None:
                         task.cancel()

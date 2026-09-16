@@ -5,7 +5,7 @@ from rich.console import Console
 
 from burn import views
 from burn.dashboard import dashboard, scrollbar
-from burn.model import Gauge, Snapshot, Usage
+from burn.model import Gauge, Quota, Reading, Snapshot, Spend, Usage
 from burn.state import HELP, TURNS, View, viewport
 
 
@@ -84,6 +84,47 @@ def test_a_codex_gauge_is_labelled_by_its_window_length(busy):
     assert "Codex 5h00m" in plain(dashboard(busy, View()))
 
 
+REPORTED = Reading(
+    at=1000.0,
+    windows=(
+        Quota(name="5h", group="session", used_percent=2.0, resets_at=1789512599),
+        Quota(name="week", group="weekly", used_percent=8.0, resets_at=1789797599, active=True),
+        Quota(name="week", group="weekly", used_percent=6.0, resets_at=1789797599, scope="Fable"),
+    ),
+    spend=Spend(used=261.32, cap=750.0),
+)
+
+
+def test_reported_window_shows_its_percentage(busy, snapshot):
+    frame = plain(dashboard(snapshot(calls=busy.calls, reading=REPORTED), View()))
+    assert "Claude 5h" in frame and "2.0%" in frame and "8.0%" in frame
+
+
+def test_scoped_window_names_the_model(busy, snapshot):
+    assert "Fable" in plain(dashboard(snapshot(calls=busy.calls, reading=REPORTED), View()))
+
+
+def test_governing_window_is_marked(busy, snapshot):
+    assert "governing" in plain(dashboard(snapshot(calls=busy.calls, reading=REPORTED), View()))
+
+
+def test_credits_show_usage_and_cap(busy, snapshot):
+    frame = plain(dashboard(snapshot(calls=busy.calls, reading=REPORTED), View()))
+    assert "$261.32 of $750.00" in frame
+
+
+def test_reported_quota_replaces_local_estimate(busy, snapshot):
+    """Do not show a local estimate with reported quota data."""
+    reported = snapshot(calls=busy.calls, reading=REPORTED)
+    assert "no --limit set" not in plain(dashboard(reported, View()))
+    assert "no --limit set" in plain(dashboard(snapshot(calls=busy.calls), View()))
+
+
+def test_empty_reading_uses_local_estimate(busy, snapshot):
+    blank = snapshot(calls=busy.calls, reading=Reading(at=1000.0))
+    assert "no --limit set" in plain(dashboard(blank, View()))
+
+
 def test_the_sorted_column_is_marked_in_the_header(busy):
     assert "WEIGHT▼" in plain(dashboard(busy, View()))
     assert "CTX▲" in plain(dashboard(busy, View(sort="ctx", reverse=False)))
@@ -99,9 +140,13 @@ def test_the_zoom_pane_reports_a_session_with_nothing_in_the_window(busy):
     assert "no session selected" in frame or "no calls in this window" in frame
 
 
-def test_the_dashboard_fits_the_height_it_is_given(busy, snapshot, call):
+@pytest.mark.parametrize("reading", [None, REPORTED])
+def test_dashboard_fits_available_height(reading, busy, snapshot, call):
+    """The layout accounts for the number of reported windows."""
     crowded = snapshot(
-        calls=[call(at=1000.0, session=f"s{n:03d}", usage=Usage(input=n)) for n in range(60)]
+        calls=[call(at=1000.0, session=f"s{n:03d}", usage=Usage(input=n)) for n in range(60)],
+        gauges=busy.gauges,
+        reading=reading,
     )
     assert len(plain(dashboard(crowded, View()), height=24).splitlines()) <= 24
 
@@ -118,3 +163,40 @@ def test_the_viewport_keeps_the_cursor_inside_itself():
     assert viewport(rows, at=0, capacity=10)[1] == 0
     assert viewport(rows, at=99, capacity=10)[1] == 90
     assert viewport(rows[:5], at=0, capacity=10) == (rows[:5], 0)
+
+
+def test_pending_window_shows_no_value(busy, snapshot):
+    from dataclasses import replace
+
+    waiting = snapshot(calls=busy.calls, reading=replace(REPORTED, pending=True))
+    frame = plain(dashboard(waiting, View()))
+    assert "Claude 5h" in frame, "draw the row before its value is known"
+    assert "2.0%" not in frame and "$261.32" not in frame
+
+
+def brackets(frame):
+    """Return each meter bar's line and column positions."""
+    return [
+        (n, line.index("["), line.index("]"))
+        for n, line in enumerate(frame.splitlines())
+        if "[" in line and "]" in line
+    ]
+
+
+def test_values_do_not_change_meter_positions(busy, snapshot):
+    """Meter rows and columns stay fixed while values load."""
+    from dataclasses import replace
+
+    waiting = plain(dashboard(snapshot(calls=busy.calls, reading=replace(REPORTED, pending=True)),
+                              View()))
+    arrived = plain(dashboard(snapshot(calls=busy.calls, reading=REPORTED), View()))
+    assert len(waiting.splitlines()) == len(arrived.splitlines())
+    assert brackets(waiting) == brackets(arrived)
+
+
+def test_pending_quota_does_not_use_local_estimate(busy, snapshot):
+    """The pending quota keeps the meter layout fixed."""
+    from dataclasses import replace
+
+    waiting = snapshot(calls=busy.calls, reading=replace(REPORTED, pending=True))
+    assert "no --limit set" not in plain(dashboard(waiting, View()))

@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "Token burn inspection for Claude Code and Codex"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["rich>=13.7"]
+dependencies = ["rich>=13.7", "certifi>=2024.2"]
 
 [project.scripts]
 burn = "burn.cli:main"

@@ -1,8 +1,13 @@
 """Parsing both transcript formats, and tailing files as they grow."""
 
+import asyncio
 import json
+import threading
+import time
 
-from burn.ingest import Carry, read_claude, read_codex, tail
+import pytest
+
+from burn.ingest import Carry, Tailer, read_claude, read_codex, tail
 from burn.model import CODEX
 
 
@@ -184,3 +189,128 @@ def test_tail_restarts_when_a_file_shrinks(tmp_path):
 
 def test_tail_of_a_missing_file_is_silent(tmp_path):
     assert tail(tmp_path / "gone.jsonl", 0) == ([], 0)
+
+
+# ------------------------------------------------------------ quota polling
+#
+# Each test runs one Tailer with asyncio.run. Poll order affects the contract.
+# Each test therefore uses an event loop.
+
+
+def fake_reading(percent):
+    from burn.model import Quota, Reading
+
+    return Reading(at=0.0, windows=(Quota(name="5h", group="session", used_percent=percent),))
+
+
+@pytest.fixture
+def polls(monkeypatch):
+    """Disable transcript reads and return scripted quota responses."""
+    from burn import ingest
+
+    monkeypatch.setattr(ingest, "transcripts", lambda horizon: [])
+    taken, answers = [], []
+
+    def poll():
+        taken.append(len(taken))
+        return answers[len(taken) - 1]
+
+    monkeypatch.setattr(ingest.quota, "reading", poll)
+    return taken, answers
+
+
+def sampled(tailer, times=1):
+    """Sample and wait for quota data."""
+
+    async def run():
+        for _ in range(times):
+            snapshot = await tailer.sample(300, settle=5.0)
+        return snapshot
+
+    return asyncio.run(run())
+
+
+def test_first_sample_reports_quota(polls):
+    taken, answers = polls
+    answers.append(fake_reading(1.0))
+    tailer = Tailer()
+    assert sampled(tailer).reading.windows[0].used_percent == 1.0
+    assert taken == [0]
+
+
+def test_quota_is_not_polled_for_each_frame(polls):
+    taken, answers = polls
+    answers.extend(fake_reading(float(n)) for n in range(5))
+    sampled(Tailer(), times=5)
+    assert len(taken) == 1, "refreshes must not set the request interval"
+
+
+def test_failed_poll_keeps_last_reading(polls, monkeypatch):
+    from burn import ingest
+
+    taken, answers = polls
+    answers.extend([fake_reading(7.0), None])
+    monkeypatch.setattr(ingest, "QUOTA_TTL", 0.0)
+    tailer = Tailer()
+    assert sampled(tailer, times=2).reading.windows[0].used_percent == 7.0
+    assert len(taken) == 2
+
+
+def test_poll_error_does_not_stop_sampling(polls, monkeypatch):
+    from burn import ingest
+
+    def explode():
+        raise RuntimeError("network error")
+
+    monkeypatch.setattr(ingest.quota, "reading", explode)
+    assert sampled(Tailer()).reading is None
+
+
+def test_no_remote_skips_quota_poll(polls):
+    taken, answers = polls
+    answers.append(fake_reading(1.0))
+    assert sampled(Tailer(remote=False)).reading is None
+    assert taken == []
+
+
+def test_quota_wait_ends_at_deadline(polls, monkeypatch):
+    """A stalled request must not block the terminal."""
+    from burn import ingest
+
+    release = threading.Event()
+    monkeypatch.setattr(ingest.quota, "reading", lambda: release.wait(30))
+
+    async def run():
+        tailer = Tailer()
+        started = time.monotonic()
+        # Measure inside the loop. asyncio.run() also waits for the worker
+        # thread. That wait is outside the sample deadline.
+        snapshot = await tailer.sample(300, settle=0.05)
+        waited = time.monotonic() - started
+        release.set()
+        return waited, snapshot
+
+    waited, snapshot = asyncio.run(run())
+    assert waited < 5
+    assert snapshot.reading is None
+
+
+def test_late_poll_updates_later_frame(polls, monkeypatch):
+    from burn import ingest
+
+    taken, answers = polls
+    answers.append(fake_reading(3.0))
+    release = threading.Event()
+    reading = ingest.quota.reading
+    monkeypatch.setattr(ingest.quota, "reading", lambda: release.wait(5) and reading())
+
+    async def run():
+        tailer = Tailer()
+        missed = await tailer.sample(300, settle=0.05)
+        release.set()
+        return missed, await tailer.sample(300, settle=5.0)
+
+    missed, arrived = asyncio.run(run())
+    assert missed.reading is None
+    assert arrived.reading.windows[0].used_percent == 3.0
+    assert len(taken) == 1, "a missed deadline must not start a second request"

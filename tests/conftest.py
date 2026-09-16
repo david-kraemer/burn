@@ -19,8 +19,9 @@ def call():
 
 @pytest.fixture
 def snapshot(call):
-    def make(calls=(), tools=(), at=1000.0, gauges=()):
-        return Snapshot(at=at, calls=tuple(calls), tools=tuple(tools), gauges=tuple(gauges))
+    def make(calls=(), tools=(), at=1000.0, gauges=(), reading=None):
+        return Snapshot(at=at, calls=tuple(calls), tools=tuple(tools), gauges=tuple(gauges),
+                        reading=reading)
 
     return make
 
@@ -49,3 +50,15 @@ def free_rates(monkeypatch, tmp_path):
     monkeypatch.setattr(analysis, "CLAUDE_ROOT", tmp_path / "empty")
     yield
     analysis._rates_within.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def offline(monkeypatch, tmp_path):
+    """Prevent tests from accessing the usage endpoint or quota cache.
+
+    Stub ``reported``, not ``token``. Token tests stub the subprocess.
+    """
+    from burn import quota
+
+    monkeypatch.setattr(quota, "reported", lambda: quota.Response())
+    monkeypatch.setattr(quota, "CACHE", tmp_path / "quota.json")

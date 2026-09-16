@@ -12,7 +12,7 @@ from . import views
 from .analysis import current_block, dollars, lanes, projected
 from .format import clock, label, quantity, span, sparkline, tint, trim
 from .keys import BINDINGS, HELP_TEXT
-from .model import BLOCK, CLAUDE, CODEX, Row, Snapshot
+from .model import BLOCK, CLAUDE, CODEX, Quota, Row, Snapshot, Spend
 from .state import FILTER, HELP, SORTS, TOOLS, View, cursor, rows, viewport
 from .widgets import meter
 
@@ -20,12 +20,16 @@ LANE_WIDTH = 48
 METER_WIDTH = 24
 ZOOM_LINES = 13
 
-# Masthead, meters, burn lanes, table, scroll indicator, and key bar.
-CHROME = 13
+# Masthead, burn lanes, table, scroll indicator, and key bar. Count quota
+# meters separately. The number of windows can change.
+CHROME = 10
 
 AGENT_STYLE = {CLAUDE: "cyan", CODEX: "magenta"}
 FRESH = 20  # a session first seen this recently is highlighted
 IDLE = 120  # a session silent this long is dimmed
+
+# Placeholder for an unavailable value. Keep the width of the replaced value.
+UNREAD = "      ·"
 
 
 def dashboard(snapshot: Snapshot, view: View, height: int = 24) -> Group:
@@ -35,13 +39,14 @@ def dashboard(snapshot: Snapshot, view: View, height: int = 24) -> Group:
         return Group(masthead(snapshot, view, table), Text(""), helpscreen(), keybar(view))
 
     at = cursor(view, table)
-    capacity = max(3, height - CHROME - (ZOOM_LINES if view.zoomed else 0))
+    drawn = meters(snapshot, view)
+    capacity = max(3, height - CHROME - len(drawn) - (ZOOM_LINES if view.zoomed else 0))
     shown, offset = viewport(table, at, capacity)
 
     body: list[RenderableType] = [
         masthead(snapshot, view, table),
         Text(""),
-        meters(snapshot, view),
+        Group(*drawn),
         Text(""),
         burn_lanes(snapshot, view),
         Text(""),
@@ -77,13 +82,66 @@ def masthead(snapshot: Snapshot, view: View, table: list[Row]) -> Text:
     return line
 
 
-def meters(snapshot: Snapshot, view: View) -> Group:
+def meters(snapshot: Snapshot, view: View) -> list[Text]:
     """Render one bracket meter per quota window."""
-    return Group(claude_meter(snapshot, view), *codex_meters(snapshot))
+    return [*claude_meters(snapshot, view), *codex_meters(snapshot)]
 
 
-def claude_meter(snapshot: Snapshot, view: View) -> Text:
-    """Render the five-hour quota block."""
+def claude_meters(snapshot: Snapshot, view: View) -> list[Text]:
+    """Render Claude quota windows and extra-usage credits."""
+    reading = snapshot.reading
+    if reading is None:
+        return [local_meter(snapshot, view)]
+    drawn = [quota_meter(window, reading.pending) for window in reading.windows]
+    if reading.spend is not None:
+        drawn.append(credit_meter(reading.spend, reading.pending))
+    return drawn or [local_meter(snapshot, view)]
+
+
+def quota_meter(window: Quota, unread: bool = False) -> Text:
+    """Render one Anthropic quota window.
+
+    If a window is pending, keep its row and width. Show no value until the
+    request completes.
+    """
+    if unread:
+        return Text.assemble(
+            (f"Claude {window.name:<5.5}", "cyan"),
+            meter(0.0, METER_WIDTH, "dim"),
+            (UNREAD, "dim"),
+            (f"  {window.scope}", "dim") if window.scope else "",
+        )
+    return Text.assemble(
+        (f"Claude {window.name:<5.5}", "cyan"),
+        meter(window.used_percent / 100, METER_WIDTH, tint(window.used_percent)),
+        f" {window.used_percent:5.1f}%",
+        (f"  {window.scope}", "dim") if window.scope else "",
+        (f"  resets {clock(window.resets_at)}", "dim"),
+        ("  governing", "yellow") if window.active else "",
+    )
+
+
+def credit_meter(credits: Spend, unread: bool = False) -> Text:
+    """Render extra-usage credits used against their cap."""
+    if unread:
+        return Text.assemble(
+            ("Claude cred ", "cyan"), meter(0.0, METER_WIDTH, "dim"), (UNREAD, "dim")
+        )
+    used = credits.used_percent
+    return Text.assemble(
+        ("Claude cred ", "cyan"),
+        meter(used / 100, METER_WIDTH, tint(used)),
+        f" {used:5.1f}%",
+        (f"  ${credits.used:,.2f} of ${credits.cap:,.2f}", "dim"),
+    )
+
+
+def local_meter(snapshot: Snapshot, view: View) -> Text:
+    """Render a five-hour estimate from local transcripts.
+
+    This meter measures weighted tokens. It does not measure account quota. If
+    ``--limit`` is not set, show elapsed time. Reported quota windows replace it.
+    """
     made = [c for c in snapshot.calls if c.source == CLAUDE]
     start = current_block(made, snapshot.at)
     if start is None:
@@ -98,8 +156,7 @@ def claude_meter(snapshot: Snapshot, view: View) -> Text:
         fraction, style = spent / view.limit, "cyan"
         tail = f"{quantity(spent)}/{quantity(view.limit)}"
     else:
-        # No allowance set: track elapsed time, not tokens, and dim it so
-        # it doesn't read as a real quota meter.
+        # No allowance: show elapsed time. Dim the meter to mark it as an estimate.
         fraction, style = elapsed / BLOCK, "dim"
         tail = f"{quantity(spent)} spent, no --limit set"
     return Text.assemble(

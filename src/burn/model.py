@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from itertools import pairwise
 
-__all__ = ["Call", "Gauge", "Row", "Snapshot", "Tooling", "Usage"]
+__all__ = ["Call", "Gauge", "Quota", "Reading", "Row", "Snapshot", "Spend", "Tooling", "Usage"]
 
 # Weights are relative to one input token; raw sums overstate cost.
 CACHE_WRITE_WEIGHT = 1.25
@@ -100,6 +100,41 @@ class Gauge:
 
 
 @dataclass(frozen=True, slots=True)
+class Quota:
+    """Quota window for the signed-in Anthropic account."""
+
+    name: str
+    group: str
+    used_percent: float
+    resets_at: float | None = None
+    scope: str | None = None  # Optional model name for this window.
+    active: bool = False  # True when this window controls the account.
+
+
+@dataclass(frozen=True, slots=True)
+class Spend:
+    """Extra-usage credits used against a cap. Values use major currency units."""
+
+    used: float
+    cap: float
+
+    @property
+    def used_percent(self) -> float:
+        return 100 * self.used / self.cap if self.cap else 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class Reading:
+    """Reported quota data, or its window shape while values are pending."""
+
+    at: float
+    windows: tuple[Quota, ...] = ()
+    spend: Spend | None = None
+    # Draw the last known windows while values are pending.
+    pending: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Snapshot:
     """Data read from disk at one point in time."""
 
@@ -107,6 +142,7 @@ class Snapshot:
     calls: tuple[Call, ...] = ()
     tools: tuple[Tooling, ...] = ()
     gauges: tuple[Gauge, ...] = ()
+    reading: Reading | None = None  # Quota data from Claude.
 
     def since(self, seconds: float) -> Snapshot:
         """Return data from the last ``seconds``."""

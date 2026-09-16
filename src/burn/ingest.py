@@ -9,6 +9,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from . import quota
 from .format import moment, short
 from .model import (
     CLAUDE,
@@ -16,6 +17,7 @@ from .model import (
     FANOUT_TOOLS,
     Call,
     Gauge,
+    Reading,
     Snapshot,
     Tooling,
     Usage,
@@ -23,6 +25,10 @@ from .model import (
 
 CLAUDE_ROOT = Path.home() / ".claude" / "projects"
 CODEX_ROOT = Path.home() / ".codex" / "sessions"
+
+# Quota data comes from the network. Poll it less often than transcripts. Keep
+# the poll off the frame's critical path. Use the cache interval.
+QUOTA_TTL = quota.TTL
 
 TREES = (
     (CLAUDE_ROOT, CLAUDE, "*/*.jsonl"),
@@ -55,21 +61,33 @@ class Carry:
 class Tailer:
     """Incremental reader over both transcript trees."""
 
-    def __init__(self) -> None:
+    def __init__(self, remote: bool = True) -> None:
         self._offsets: dict[Path, int] = {}
         self._carry: dict[Path, Carry] = {}
         self._calls: dict[str, Call] = {}
         self._tools: list[Tooling] = []
         self._gauges: tuple[Gauge, ...] = ()
         self._gauges_at = ""
+        self._remote = remote
+        self._reading: Reading | None = None
+        self._polling: asyncio.Task[Reading | None] | None = None
+        self._polled = 0.0
 
-    async def sample(self, window: int) -> Snapshot:
-        """Read new records and return the current snapshot; parsing runs off-thread."""
+    async def sample(self, window: int, settle: float = 0.0) -> Snapshot:
+        """Read new records and return a snapshot.
+
+        Run parsing in a worker thread. ``settle`` sets the maximum wait for
+        quota data. If the wait expires, leave the request for the next frame.
+        """
         now = time.time()
         horizon = now - (max(window, 300) + 60) * 60
+        self._poll(now)
         for path, offset, fragment in await asyncio.to_thread(self._read, horizon):
             self._offsets[path] = offset
             self._absorb(fragment)
+        if settle and self._polling is not None:
+            await asyncio.wait({self._polling}, timeout=settle)
+            self._collect()
         # Retain double the window: a widen ("+") must still find data whose
         # byte offset has already advanced past it.
         self._forget(now - max(window, 300) * 60 * 2)
@@ -78,7 +96,37 @@ class Tailer:
             calls=tuple(sorted(self._calls.values(), key=lambda c: c.at)),
             tools=tuple(sorted(self._tools, key=lambda t: t.at)),
             gauges=self._gauges,
+            reading=self._reading,
         )
+
+    def close(self) -> None:
+        """Cancel an active quota poll."""
+        if self._polling is not None:
+            self._polling.cancel()
+            self._polling = None
+
+    def _poll(self, now: float) -> None:
+        """Start or collect a quota poll without waiting for it."""
+        self._collect()
+        if not self._remote or self._polling is not None or now - self._polled < QUOTA_TTL:
+            return
+        if self._reading is None:
+            # Set the meter height from the cached window shape before the
+            # first request. Add the values when the request completes.
+            self._reading = quota.shape()
+        self._polled = now
+        self._polling = asyncio.create_task(asyncio.to_thread(quota.reading))
+
+    def _collect(self) -> None:
+        """Store a completed quota poll. Keep the last good reading on failure."""
+        if self._polling is None or not self._polling.done():
+            return
+        task, self._polling = self._polling, None
+        if task.cancelled() or task.exception() is not None:
+            return
+        # Keep the previous reading after a request failure. A failed request
+        # does not prove that quota data is unknown.
+        self._reading = task.result() or self._reading
 
     def _read(self, horizon: float) -> list[tuple[Path, int, Fragment]]:
         found = []
