@@ -53,7 +53,7 @@ def test_verify_reads_the_transcript_tree_not_the_snapshot(monkeypatch):
     from burn import analysis, views
 
     monkeypatch.setattr(analysis, "transcripts_audit", lambda: [])
-    monkeypatch.setattr(views.analysis, "transcripts_audit", lambda: [])
+    monkeypatch.setattr(views, "transcripts_audit", lambda: [])
     args = _parser().parse_args(["verify"])
     assert "No closed sessions" in plain(_render(args, View(), Snapshot(), 40))
 
@@ -129,13 +129,13 @@ def test_json_keeps_the_sort_flag(monkeypatch, capsys, busy):
 def test_follow_prints_one_compact_document_per_line(monkeypatch, capsys, busy):
     import json
 
-    from burn import cli
+    from burn import burn_document, cli
 
     async def documents(window, **kwargs):
         for _ in range(3):
-            yield cli.api.burn_document(busy, View(window=window))
+            yield burn_document(busy, View(window=window))
 
-    monkeypatch.setattr(cli.api, "burn_documents", documents)
+    monkeypatch.setattr(cli, "burn_documents", documents)
     main(["--json", "--follow", "--no-remote"])
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 3 and all(" " not in line for line in lines)

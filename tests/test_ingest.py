@@ -215,7 +215,7 @@ def polls(monkeypatch):
         taken.append(len(taken))
         return answers[len(taken) - 1]
 
-    monkeypatch.setattr(ingest.quota, "quota_reading", poll)
+    monkeypatch.setattr(ingest, "quota_reading", poll)
     return taken, answers
 
 
@@ -250,7 +250,7 @@ def test_failed_poll_keeps_last_reading(polls, monkeypatch):
 
     taken, answers = polls
     answers.extend([fake_reading(7.0), None])
-    monkeypatch.setattr(ingest.quota, "QUOTA_TTL", 0.0)
+    monkeypatch.setattr(ingest, "QUOTA_TTL", 0.0)
     tailer = Tailer()
     assert sampled(tailer, times=2).reading.windows[0].used_percent == 7.0
     assert len(taken) == 2
@@ -262,7 +262,7 @@ def test_poll_error_does_not_stop_sampling(polls, monkeypatch):
     def explode():
         raise RuntimeError("network error")
 
-    monkeypatch.setattr(ingest.quota, "quota_reading", explode)
+    monkeypatch.setattr(ingest, "quota_reading", explode)
     assert sampled(Tailer()).reading is None
 
 
@@ -278,7 +278,7 @@ def test_quota_wait_ends_at_deadline(polls, monkeypatch):
     from burn import ingest
 
     release = threading.Event()
-    monkeypatch.setattr(ingest.quota, "quota_reading", lambda: release.wait(30))
+    monkeypatch.setattr(ingest, "quota_reading", lambda: release.wait(30))
 
     async def run():
         tailer = Tailer()
@@ -301,8 +301,8 @@ def test_late_poll_updates_later_frame(polls, monkeypatch):
     taken, answers = polls
     answers.append(fake_reading(3.0))
     release = threading.Event()
-    reading = ingest.quota.quota_reading
-    monkeypatch.setattr(ingest.quota, "quota_reading", lambda: release.wait(5) and reading())
+    reading = ingest.quota_reading
+    monkeypatch.setattr(ingest, "quota_reading", lambda: release.wait(5) and reading())
 
     async def run():
         tailer = Tailer()

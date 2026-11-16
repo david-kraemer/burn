@@ -22,9 +22,9 @@ from collections.abc import AsyncIterator
 from rich.console import Console
 from rich.live import Live
 
-from . import keys as bindings
 from .dashboard import snapshot_dashboard
 from .ingest import Tailer
+from .keys import key_apply
 from .model import Snapshot
 from .state import View, view_rows
 
@@ -71,7 +71,7 @@ async def console_monitor(console: Console, view: View, remote: bool = True) -> 
                     if waiting in done:
                         key = waiting.result()
                         waiting = None
-                        updated = bindings.key_apply(key, view, view_rows(view, snapshot))
+                        updated = key_apply(key, view, view_rows(view, snapshot))
                         if updated is None:
                             return
                         if updated.window != view.window:

@@ -27,12 +27,21 @@ from collections.abc import Callable
 
 from rich.console import Console, RenderableType
 
-from . import api, quota, views
+from .api import burn_documents, burn_latest
 from .app import console_monitor
 from .dashboard import snapshot_dashboard
 from .ingest import Tailer
 from .model import Snapshot
+from .quota import QUOTA_TIMEOUT
 from .state import SORTS, View
+from .views import (
+    report_audit,
+    report_cost,
+    report_session,
+    report_tools,
+    report_turns,
+    report_waste,
+)
 
 LIVE = "live"
 VIEWS = (LIVE, "tools", "turns", "session", "cost", "waste", "verify")
@@ -173,7 +182,7 @@ async def _report(args: argparse.Namespace, view: View) -> None:
     remote = args.view == LIVE and not args.no_remote
     # A one-shot view has no later frame. If remote quota is enabled, wait for
     # the request.
-    settle = quota.QUOTA_TIMEOUT if remote else 0.0
+    settle = QUOTA_TIMEOUT if remote else 0.0
     snapshot = await Tailer(remote=remote).sample(args.window, settle=settle)
     if _plain_wanted(args):
         sys.stdout.write(_plain(_render(args, view, snapshot, PLAIN_HEIGHT)))
@@ -196,7 +205,7 @@ def _plain(renderable: RenderableType) -> str:
 
 async def _dump(args: argparse.Namespace) -> None:
     """Print quota windows and per-session rows as one JSON document."""
-    doc = await api.burn_latest(
+    doc = await burn_latest(
         args.window, source=args.source, sort=args.sort, remote=not args.no_remote
     )
     print(json.dumps(doc))
@@ -204,7 +213,7 @@ async def _dump(args: argparse.Namespace) -> None:
 
 async def _follow(args: argparse.Namespace) -> None:
     """Print one compact JSON document per line, flushed, until stopped or the pipe closes."""
-    async for doc in api.burn_documents(
+    async for doc in burn_documents(
         args.window,
         interval=args.interval,
         source=args.source,
@@ -222,14 +231,14 @@ def _render(
     if args.view == LIVE:
         return snapshot_dashboard(snapshot, view, height)
     if args.view == "verify":
-        return views.report_audit()
+        return report_audit()
     narrowed = snapshot.since(view.seconds).from_agent(view.source)
     chosen: dict[str, Callable[[], RenderableType]] = {
-        "tools": lambda: views.report_tools(narrowed, args.top),
-        "turns": lambda: views.report_turns(narrowed, args.top),
-        "session": lambda: views.report_session(narrowed, args.target),
-        "cost": lambda: views.report_cost(narrowed, args.window),
-        "waste": lambda: views.report_waste(narrowed),
+        "tools": lambda: report_tools(narrowed, args.top),
+        "turns": lambda: report_turns(narrowed, args.top),
+        "session": lambda: report_session(narrowed, args.target),
+        "cost": lambda: report_cost(narrowed, args.window),
+        "waste": lambda: report_waste(narrowed),
     }
     return chosen[args.view]()
 

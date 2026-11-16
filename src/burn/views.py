@@ -8,7 +8,16 @@ import datetime
 from rich.console import Group, RenderableType
 from rich.text import Text
 
-from . import analysis
+from .analysis import (
+    call_dollars,
+    calls_attribution,
+    calls_resumes,
+    calls_sessions,
+    calls_waste,
+    rates_blended,
+    rates_solved,
+    transcripts_audit,
+)
 from .format import (
     model_label,
     number_quantity,
@@ -24,7 +33,7 @@ from .widgets import widget_bar, widget_columns, widget_grid
 
 def report_tools(snapshot: Snapshot, top: int = 15) -> RenderableType:
     """Show context growth by tool."""
-    blamed = analysis.calls_attribution(snapshot.calls, snapshot.tools)
+    blamed = calls_attribution(snapshot.calls, snapshot.tools)
     if not blamed:
         return Text("No attributable context growth in this window.", style="dim")
 
@@ -79,9 +88,9 @@ def report_turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
 
     # "Most expensive" is dollars, not tokens: a heavily-used cheap model
     # can outweigh a pricier one in tokens while costing less.
-    ranked = sorted(grouped.items(), key=lambda kv: -sum(analysis.call_dollars(c) for c in kv[1]))
+    ranked = sorted(grouped.items(), key=lambda kv: -sum(call_dollars(c) for c in kv[1]))
     for (session, prompt), items in ranked[:top]:
-        cost = sum(analysis.call_dollars(c) for c in items)
+        cost = sum(call_dollars(c) for c in items)
         table.add_row(
             f"{datetime.datetime.fromtimestamp(items[0].at, datetime.UTC).astimezone():%H:%M}",
             session,
@@ -103,7 +112,7 @@ def report_session(snapshot: Snapshot, target: str | None) -> RenderableType:
 
     total = sum((c.usage for c in items), Usage())
     hit = 100 * total.cache_read / max(total.cache_read + total.cache_write, 1)
-    money = sum(analysis.call_dollars(c) for c in items)
+    money = sum(call_dollars(c) for c in items)
     # Context belongs to the main thread; subagent requests have their own.
     own = [c for c in items if not c.sidechain] or items
     peak = max(c.prefix for c in own)
@@ -148,14 +157,14 @@ def report_session(snapshot: Snapshot, target: str | None) -> RenderableType:
 def report_cost(snapshot: Snapshot, window: int) -> RenderableType:
     """Show estimated spend by model and project."""
     table = widget_columns([("MODEL", 26)], [("$/WEIGHTED Mtok", 16), ("SAMPLES", 8)])
-    for model, (rate, samples) in sorted(analysis.rates_solved().items()):
+    for model, (rate, samples) in sorted(rates_solved().items()):
         table.add_row(model_label(model), f"{rate:.2f}", str(samples))
 
     spent: dict[tuple[str, str], list[float]] = collections.defaultdict(lambda: [0.0, 0.0])
     for call in snapshot.calls:
         entry = spent[(call.source, call.project)]
         entry[0] += call.weight
-        entry[1] += analysis.call_dollars(call)
+        entry[1] += call_dollars(call)
 
     spend = widget_columns([("PROJECT", 24)], [("WEIGHT", 8), ("COST", 8)])
     for (source, project), (weight, money) in sorted(spent.items(), key=lambda kv: -kv[1][1])[:15]:
@@ -184,7 +193,7 @@ def report_cost(snapshot: Snapshot, window: int) -> RenderableType:
 
 def report_waste(snapshot: Snapshot) -> RenderableType:
     """Show cache tokens recreated after idle periods."""
-    summary = analysis.calls_waste(snapshot.calls, CACHE_TTL)
+    summary = calls_waste(snapshot.calls, CACHE_TTL)
     if not summary.total:
         return Text("No cache re-creation in this window.", style="dim")
 
@@ -193,7 +202,7 @@ def report_waste(snapshot: Snapshot) -> RenderableType:
          f"{number_quantity(summary.idle_tokens)} over {summary.idle_events} resumes"),
         ("re-created in flow", f"{number_quantity(summary.churn_tokens)} (new turns, unavoidable)"),
         ("idle premium", f"{number_quantity(summary.premium)} weighted tokens, "
-                         f"~${summary.premium * analysis.rates_blended():.2f}"),
+                         f"~${summary.premium * rates_blended():.2f}"),
         ("", Text(f"{100 * summary.idle_tokens / summary.total:.0f}% of all cache creation "
                   f"followed a gap longer than {seconds_span(CACHE_TTL)}", style="dim")),
     ])
@@ -201,7 +210,7 @@ def report_waste(snapshot: Snapshot) -> RenderableType:
     tiers = widget_columns(
         [("SESSION", 12)], [("5m TIER", 9), ("1h TIER", 9), ("IDLE RESUMES", 13)]
     )
-    grouped = analysis.calls_sessions(snapshot.calls)
+    grouped = calls_sessions(snapshot.calls)
     ranked = sorted(
         ((name, items) for name, items in grouped.items()
          if any(c.usage.cache_write for c in items)),
@@ -212,7 +221,7 @@ def report_waste(snapshot: Snapshot) -> RenderableType:
             name,
             number_quantity(sum(c.cache_5m for c in items)),
             number_quantity(sum(c.cache_1h for c in items)),
-            str(analysis.calls_resumes(items, CACHE_TTL)),
+            str(calls_resumes(items, CACHE_TTL)),
         )
 
     return Group(
@@ -232,7 +241,7 @@ def report_waste(snapshot: Snapshot) -> RenderableType:
 
 def report_audit(threshold: float = 15.0) -> RenderableType:
     """Compare observed tokens with Claude's billed totals."""
-    found = analysis.transcripts_audit()
+    found = transcripts_audit()
     if not found:
         return Text("No closed sessions with cost-state records yet.", style="dim")
 

@@ -26,9 +26,9 @@ import dataclasses
 import time
 from collections.abc import AsyncIterator
 
-from . import quota
 from .ingest import Tailer
 from .model import Snapshot
+from .quota import QUOTA_TIMEOUT
 from .state import View, view_rows
 
 BURN_SCHEMA = 1
@@ -44,7 +44,7 @@ async def burn_latest(
     """
     tailer = Tailer(remote=remote)
     try:
-        snapshot = await tailer.sample(window, settle=quota.QUOTA_TIMEOUT if remote else 0.0)
+        snapshot = await tailer.sample(window, settle=QUOTA_TIMEOUT if remote else 0.0)
     finally:
         tailer.close()
     return burn_document(snapshot, View(window=window, source=source, sort=sort))
@@ -66,7 +66,7 @@ async def burn_documents(
     """
     tailer = Tailer(remote=remote)
     view = View(window=window, interval=interval, source=source, sort=sort)
-    settle = quota.QUOTA_TIMEOUT if remote else 0.0
+    settle = QUOTA_TIMEOUT if remote else 0.0
     try:
         while True:
             due = time.monotonic() + interval
@@ -88,7 +88,7 @@ def burn_document(snapshot: Snapshot, view: View) -> dict:
         "source": view.source,
         "quota": [dataclasses.asdict(window) for window in reading.windows] if reading else [],
         "quota_at": reading.at if reading else None,
-        # Pending values are older than quota.QUOTA_STALE and shown only for shape.
+        # Pending values are older than QUOTA_STALE and shown only for shape.
         "quota_pending": reading.pending if reading else False,
         "spend": dataclasses.asdict(reading.spend) if reading and reading.spend else None,
         "codex": [dataclasses.asdict(gauge) for gauge in snapshot.gauges],

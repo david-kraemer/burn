@@ -8,7 +8,6 @@ from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
-from . import views
 from .analysis import call_dollars, calls_block, calls_lanes, spend_projected
 from .format import (
     epoch_deadline,
@@ -22,6 +21,7 @@ from .format import (
 from .keys import BINDINGS, HELP_TEXT
 from .model import BLOCK, CLAUDE, CODEX, Quota, Row, Snapshot, Spend
 from .state import FILTER, HELP, SORTS, TOOLS, View, table_viewport, view_cursor, view_rows
+from .views import report_tools, report_turns
 from .widgets import widget_meter
 
 LANE_WIDTH = 48
@@ -274,7 +274,7 @@ def _zoom(snapshot: Snapshot, view: View, table: list[Row], at: int) -> Renderab
     )
     if not picked.calls:
         return Text(f"  {chosen}: no calls in this window", style="dim")
-    detail = views.report_turns(picked, 6) if view.panel != TOOLS else views.report_tools(picked, 6)
+    detail = report_turns(picked, 6) if view.panel != TOOLS else report_tools(picked, 6)
     # Keyed by session, not Row.key: attribution needs the whole call
     # sequence, spanning every project row the session tabulated into.
     projects = {c.project for c in picked.calls}

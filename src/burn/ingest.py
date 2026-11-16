@@ -9,7 +9,6 @@ import pathlib
 import time
 from collections.abc import Iterable, Iterator
 
-from . import quota
 from .format import id_short, iso_epoch
 from .model import (
     CLAUDE,
@@ -22,6 +21,7 @@ from .model import (
     Tooling,
     Usage,
 )
+from .quota import QUOTA_TTL, quota_reading, quota_shape
 
 CLAUDE_ROOT = pathlib.Path.home() / ".claude" / "projects"
 CODEX_ROOT = pathlib.Path.home() / ".codex" / "sessions"
@@ -116,14 +116,14 @@ class Tailer:
         self._collect()
         # Quota data comes from the network: poll it at the cache interval, less
         # often than transcripts, and off the frame's critical path.
-        if not self._remote or self._polling is not None or now - self._polled < quota.QUOTA_TTL:
+        if not self._remote or self._polling is not None or now - self._polled < QUOTA_TTL:
             return
         if self._reading is None:
             # Set the meter height from the cached window shape before the
             # first request. Add the values when the request completes.
-            self._reading = quota.quota_shape()
+            self._reading = quota_shape()
         self._polled = now
-        self._polling = asyncio.create_task(asyncio.to_thread(quota.quota_reading))
+        self._polling = asyncio.create_task(asyncio.to_thread(quota_reading))
 
     def _collect(self) -> None:
         """Store a completed quota poll. Keep the last good reading on failure."""
