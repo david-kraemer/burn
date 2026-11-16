@@ -43,6 +43,8 @@ from .views import (
     report_waste,
 )
 
+__all__ = []
+
 LIVE = "live"
 VIEWS = (LIVE, "tools", "turns", "session", "cost", "waste", "verify")
 

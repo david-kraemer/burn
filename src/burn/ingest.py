@@ -23,6 +23,8 @@ from .model import (
 )
 from .quota import QUOTA_TTL, quota_reading, quota_shape
 
+__all__ = ["Tailer"]
+
 CLAUDE_ROOT = pathlib.Path.home() / ".claude" / "projects"
 CODEX_ROOT = pathlib.Path.home() / ".codex" / "sessions"
 

@@ -7,6 +7,8 @@ import itertools
 import re
 import time
 
+__all__ = []
+
 SPARK = "▁▂▃▄▅▆▇█"
 
 # Widest seconds_span output: "10d03h". Wider spans push the row out by one.

@@ -28,6 +28,8 @@ from .keys import key_apply
 from .model import Snapshot
 from .state import View, view_rows
 
+__all__ = []
+
 CSI = "\x1b["
 
 

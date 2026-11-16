@@ -8,6 +8,8 @@ from collections.abc import Iterable
 from rich.table import Table
 from rich.text import Text
 
+__all__ = []
+
 Column = tuple[str, int]
 
 

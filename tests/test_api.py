@@ -154,5 +154,15 @@ def test_documents_wait_for_quota_only_on_the_first_sample(monkeypatch):
 
 
 def test_the_public_surface_is_the_top_level_namespace():
-    assert all(hasattr(burn, name) for name in burn.__all__)
-    assert all(name.startswith("burn_") for name in burn.__all__ if name.islower())
+    import importlib
+    import pkgutil
+
+    exported = set()
+    for info in pkgutil.iter_modules(burn.__path__):
+        if info.name.startswith("__"):
+            continue
+        module = importlib.import_module(f"burn.{info.name}")
+        assert "__all__" in vars(module), f"burn.{info.name} defines no __all__"
+        exported |= set(module.__all__)
+    assert all(getattr(burn, name) is not None for name in exported)
+    assert all(name.startswith("burn_") for name in exported if name.islower())

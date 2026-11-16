@@ -27,7 +27,7 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/burn/__init__.py" = ["F403"]  # re-exports model's public names
+"src/burn/__init__.py" = ["F403"]  # star-imports each submodule's __all__
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

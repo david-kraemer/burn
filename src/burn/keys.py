@@ -23,6 +23,8 @@ from .state import (
     view_cursor,
 )
 
+__all__ = []
+
 UP = ("k", "\x1b[A")
 DOWN = ("j", "\x1b[B")
 ENTER = ("\r", "\n")

@@ -14,6 +14,8 @@ import time
 from .analysis import snapshot_table
 from .model import Row, Snapshot
 
+__all__ = ["View"]
+
 TABLE, HELP, FILTER = "table", "help", "filter"
 TOOLS, TURNS = "tools", "turns"
 

@@ -31,6 +31,8 @@ from .model import Snapshot
 from .quota import QUOTA_TIMEOUT
 from .state import View, view_rows
 
+__all__ = ["BURN_SCHEMA", "burn_document", "burn_documents", "burn_latest"]
+
 BURN_SCHEMA = 1
 
 

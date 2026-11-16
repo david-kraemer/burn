@@ -25,6 +25,8 @@ from .state import FILTER, HELP, SORTS, TOOLS, View, table_viewport, view_cursor
 from .views import report_tools, report_turns
 from .widgets import widget_meter
 
+__all__ = []
+
 LANE_WIDTH = 48
 METER_WIDTH = 24
 ZOOM_LINES = 13
