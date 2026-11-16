@@ -106,9 +106,7 @@ def _claude_meters(snapshot: Snapshot, view: View) -> list[Text]:
     reading = snapshot.reading
     if reading is None:
         return [_local_meter(snapshot, view)]
-    drawn = [
-        _quota_meter(window, snapshot.at, reading.pending) for window in reading.windows
-    ]
+    drawn = [_quota_meter(window, snapshot.at, reading.pending) for window in reading.windows]
     if reading.spend is not None:
         drawn.append(_credit_meter(reading.spend, reading.pending))
     return drawn or [_local_meter(snapshot, view)]
@@ -342,4 +340,4 @@ def _heading(name: str, view: View) -> Text:
 
 def _reset(epoch: float | None, now: float) -> str:
     """The reset columns shared by every quota row: when, then how long until."""
-    return f"  resets {epoch_deadline(epoch)}  {epoch_countdown(epoch, now)}"
+    return f" {epoch_deadline(epoch)} {epoch_countdown(epoch, now)}"
