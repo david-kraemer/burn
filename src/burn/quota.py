@@ -73,6 +73,17 @@ def quota_shape() -> Reading | None:
     return _usable(_cached()[0])
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class Response:
+    """Result from one quota request."""
+
+    payload: dict | None = None
+    retry_after: float = 0.0
+
+
+# -------------------------------------------------------------------- internals
+
+
 def _due(stored: Reading | None, blocked: float, now: float) -> bool:
     """Return true if the data expired and the rate-limit delay ended."""
     return now >= blocked and (stored is None or now - stored.at >= QUOTA_TTL)
@@ -97,17 +108,6 @@ def _recorded(answer: Response, stored: Reading | None, now: float) -> Reading |
     taken = Reading(at=now, windows=_windows(answer.payload), spend=_spend(answer.payload))
     _save(taken)
     return taken
-
-
-# -------------------------------------------------------------- request
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class Response:
-    """Result from one quota request."""
-
-    payload: dict | None = None
-    retry_after: float = 0.0
 
 
 def _reported() -> Response:
@@ -188,9 +188,6 @@ def _trust() -> ssl.SSLContext | None:
     return ssl.create_default_context(cafile=certifi.where())
 
 
-# ------------------------------------------------------------ reported data
-
-
 def _windows(payload: dict) -> tuple[Quota, ...]:
     """Convert reported limits to windows. Sort them by duration."""
     found = [_quota(entry) for entry in payload.get("limits", ()) if isinstance(entry, dict)]
@@ -226,9 +223,6 @@ def _spend(payload: dict) -> Spend | None:
 def _money(amount: dict) -> float:
     """Convert a minor currency value to a major currency value."""
     return amount["amount_minor"] / 10 ** amount.get("exponent", 2)
-
-
-# --------------------------------------------------------------------- cache
 
 
 def _cached() -> tuple[Reading | None, float]:

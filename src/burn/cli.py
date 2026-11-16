@@ -58,6 +58,47 @@ ASCII = str.maketrans({
 })
 
 
+def main(argv: list[str] | None = None) -> None:
+    spec = _parser()
+    args = spec.parse_args(argv)
+    if args.follow and not args.json:
+        spec.error("--follow needs --json")
+    if args.json and args.view != LIVE:
+        spec.error(f"--json prints the live view's data; it does not apply to {args.view!r}")
+    view = View(
+        window=args.window,
+        interval=args.interval,
+        limit=args.limit,
+        sort=args.sort,
+        source=args.source,
+    )
+    try:
+        if args.json:
+            asyncio.run(_follow(args) if args.follow else _dump(args))
+            return
+        # The live screen needs a terminal; piped, it prints one frame.
+        if args.view == LIVE and not args.once and not _plain_wanted(args):
+            asyncio.run(console_monitor(Console(), view, remote=not args.no_remote))
+            return
+        asyncio.run(_report(args, view))
+    except KeyboardInterrupt:
+        # cbreak mode leaves ISIG enabled, so Ctrl-C arrives as SIGINT, not
+        # as keys.QUIT's "\x03" byte. Quit exactly as "q" would.
+        pass
+    except BrokenPipeError:
+        # The reader went away (`burn --json --follow | head -1`). Point stdout
+        # at /dev/null so the interpreter's final flush cannot raise again.
+        with contextlib.suppress(OSError, ValueError):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+
+
+if __name__ == "__main__":
+    main()
+
+
+# -------------------------------------------------------------------- internals
+
+
 def _positive(kind: type, text: str, noun: str) -> int | float:
     """Parse a flag value, rejecting zero or negative numbers."""
     value = kind(text)
@@ -136,40 +177,6 @@ def _parser() -> argparse.ArgumentParser:
     return spec
 
 
-def main(argv: list[str] | None = None) -> None:
-    spec = _parser()
-    args = spec.parse_args(argv)
-    if args.follow and not args.json:
-        spec.error("--follow needs --json")
-    if args.json and args.view != LIVE:
-        spec.error(f"--json prints the live view's data; it does not apply to {args.view!r}")
-    view = View(
-        window=args.window,
-        interval=args.interval,
-        limit=args.limit,
-        sort=args.sort,
-        source=args.source,
-    )
-    try:
-        if args.json:
-            asyncio.run(_follow(args) if args.follow else _dump(args))
-            return
-        # The live screen needs a terminal; piped, it prints one frame.
-        if args.view == LIVE and not args.once and not _plain_wanted(args):
-            asyncio.run(console_monitor(Console(), view, remote=not args.no_remote))
-            return
-        asyncio.run(_report(args, view))
-    except KeyboardInterrupt:
-        # cbreak mode leaves ISIG enabled, so Ctrl-C arrives as SIGINT, not
-        # as keys.QUIT's "\x03" byte. Quit exactly as "q" would.
-        pass
-    except BrokenPipeError:
-        # The reader went away (`burn --json --follow | head -1`). Point stdout
-        # at /dev/null so the interpreter's final flush cannot raise again.
-        with contextlib.suppress(OSError, ValueError):
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-
-
 def _plain_wanted(args: argparse.Namespace) -> bool:
     """Whether to print plain text: asked for, or stdout is a pipe or file."""
     return args.plain or not sys.stdout.isatty()
@@ -241,7 +248,3 @@ def _render(
         "waste": lambda: report_waste(narrowed),
     }
     return chosen[args.view]()
-
-
-if __name__ == "__main__":
-    main()

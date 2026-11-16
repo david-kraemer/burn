@@ -171,7 +171,25 @@ class Tailer:
         self._tools = [t for t in self._tools if t.at >= cutoff]
 
 
-# -------------------------------------------------------------------- parsing
+def claude_usage(usage: dict) -> Usage:
+    return Usage(
+        input=usage.get("input_tokens") or 0,
+        cache_write=usage.get("cache_creation_input_tokens") or 0,
+        cache_read=usage.get("cache_read_input_tokens") or 0,
+        output=usage.get("output_tokens") or 0,
+    )
+
+
+def transcript_records(path: pathlib.Path) -> Iterator[dict]:
+    """Yield every record in a file."""
+    try:
+        with path.open(errors="replace") as handle:
+            yield from _decode(handle)
+    except OSError:
+        return
+
+
+# -------------------------------------------------------------------- internals
 
 
 def _parse(lines: Iterable[str], source: str, carry: Carry) -> Fragment:
@@ -352,22 +370,10 @@ def _codex_gauges(reported: dict) -> tuple[Gauge, ...]:
     return tuple(sorted(found, key=lambda g: g.window_minutes))
 
 
-def claude_usage(usage: dict) -> Usage:
-    return Usage(
-        input=usage.get("input_tokens") or 0,
-        cache_write=usage.get("cache_creation_input_tokens") or 0,
-        cache_read=usage.get("cache_read_input_tokens") or 0,
-        output=usage.get("output_tokens") or 0,
-    )
-
-
 def _blocks(message: dict) -> Iterator[dict]:
     for block in message.get("content") or []:
         if isinstance(block, dict):
             yield block
-
-
-# --------------------------------------------------------------------- files
 
 
 def _transcripts(horizon: float) -> list[tuple[pathlib.Path, str]]:
@@ -413,15 +419,6 @@ def _tail(path: pathlib.Path, offset: int) -> tuple[list[str], int]:
     # Split on "\n" only: str.splitlines() also breaks on other separators
     # legal inside a JSON string, which would corrupt a record containing one.
     return blob[:end].decode("utf-8", "replace").split("\n"), offset + end + 1
-
-
-def transcript_records(path: pathlib.Path) -> Iterator[dict]:
-    """Yield every record in a file."""
-    try:
-        with path.open(errors="replace") as handle:
-            yield from _decode(handle)
-    except OSError:
-        return
 
 
 def _decode(lines: Iterable[str]) -> Iterator[dict]:

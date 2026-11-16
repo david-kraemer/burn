@@ -67,6 +67,9 @@ def key_apply(key: str, view: View, table: Sequence[Row]) -> View | None:
     return _command(key, view, table)
 
 
+# -------------------------------------------------------------------- internals
+
+
 def _typing(key: str, view: View) -> View:
     """Filter-entry state."""
     if key in ENTER:

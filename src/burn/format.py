@@ -36,16 +36,6 @@ def seconds_span(seconds: float) -> str:
     return f"{mins}m" if minutes else f"{int(seconds)}s"
 
 
-def _clock(epoch: float | None) -> str:
-    """Format a Unix timestamp as a local time carrying its meridiem and zone."""
-    if epoch is None:
-        return "?"
-    local = datetime.datetime.fromtimestamp(epoch, datetime.UTC).astimezone()
-    # %I is zero-padded and has no portable unpadded form, and 01-12 never
-    # strips away to nothing.
-    return f"{local:%I:%M%p %Z}".lstrip("0")
-
-
 def epoch_deadline(epoch: float | None, now: float) -> str:
     """Format a reset time: the clock alone today, its date and the time left otherwise.
 
@@ -120,3 +110,16 @@ def series_resample(series: list[float], width: int) -> list[float]:
         sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1)
         for lo, hi in itertools.pairwise(edges)
     ]
+
+
+# -------------------------------------------------------------------- internals
+
+
+def _clock(epoch: float | None) -> str:
+    """Format a Unix timestamp as a local time carrying its meridiem and zone."""
+    if epoch is None:
+        return "?"
+    local = datetime.datetime.fromtimestamp(epoch, datetime.UTC).astimezone()
+    # %I is zero-padded and has no portable unpadded form, and 01-12 never
+    # strips away to nothing.
+    return f"{local:%I:%M%p %Z}".lstrip("0")

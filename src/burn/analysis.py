@@ -100,7 +100,7 @@ def calls_lanes(
     return series
 
 
-# ---------------------------------------------------------------- attribution
+# ------------------------------------------------------------------ attribution
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -146,6 +146,118 @@ def calls_attribution(calls: Iterable[Call], tooling: Iterable[Tooling]) -> list
 
     blamed = [Blame(name, a, int(n), c, d) for name, (a, n, c, d) in totals.items()]
     return sorted(blamed, key=lambda b: -b.carried)
+
+
+# ------------------------------------------------------------------ cache waste
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Waste:
+    """Cache recreation split into idle and normal churn."""
+
+    idle_tokens: int
+    idle_events: int
+    churn_tokens: int
+
+    @property
+    def total(self) -> int:
+        return self.idle_tokens + self.churn_tokens
+
+    @property
+    def premium(self) -> float:
+        return self.idle_tokens * IDLE_PREMIUM
+
+
+def calls_waste(calls: Iterable[Call], ttl: float) -> Waste:
+    """Measure cache creation after gaps longer than the cache lifetime."""
+    idle_tokens = idle_events = churn = 0
+    for items in calls_sessions(calls).values():
+        for previous, call in itertools.pairwise(items):
+            if not call.usage.cache_write:
+                continue
+            if call.at - previous.at > ttl:
+                idle_tokens += call.usage.cache_write
+                idle_events += 1
+            else:
+                churn += call.usage.cache_write
+    return Waste(idle_tokens, idle_events, churn)
+
+
+def calls_resumes(calls: Sequence[Call], ttl: float) -> int:
+    """Count cache creations after idle gaps in one session."""
+    return sum(1 for a, b in itertools.pairwise(calls) if b.usage.cache_write and b.at - a.at > ttl)
+
+
+# -------------------------------------------------------------------- the block
+
+
+def calls_block(calls: Iterable[Call], now: float) -> float | None:
+    """Return the open five-hour quota block, if one exists."""
+    start = last = None
+    for stamp in sorted(c.at for c in calls):
+        if start is None or stamp - start >= BLOCK or stamp - last >= BLOCK:
+            start = stamp - stamp % 3600
+        last = stamp
+    if start is None or now - start >= BLOCK:
+        return None
+    return start
+
+
+def spend_projected(spent: float, elapsed: float, remaining: float) -> float:
+    """Project spend at the end of the quota block."""
+    return spent + spent / max(elapsed, 60) * remaining
+
+
+# ---------------------------------------------------------------------- billing
+
+
+def rates_solved() -> Mapping[str, tuple[float, int]]:
+    """Dollars per weighted megatoken per model, from closed sessions with no subagent traffic."""
+    return _rates_within(int(time.time() // RATES_TTL))
+
+
+def call_dollars(call: Call) -> float:
+    return call.weight * _per_token_cost(call.model)
+
+
+def rates_blended() -> float:
+    """One rate spanning models, weighted by sample count, not a flat per-model average."""
+    solved = list(rates_solved().values())
+    samples = sum(n for _, n in solved)
+    if not samples:
+        return 0.0
+    return sum(rate * n for rate, n in solved) / samples / 1e6
+
+
+# ------------------------------------------------------------------------ audit
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Reconciliation:
+    """One closed session compared with Claude's billed total."""
+
+    session: str
+    observed: float
+    billed: float
+    fanout: bool
+
+    @property
+    def unseen(self) -> float:
+        """Percent of billed tokens absent from the transcript."""
+        return 100 * (self.billed - self.observed) / self.billed
+
+
+def transcripts_audit() -> list[Reconciliation]:
+    """Return closed Claude sessions with billed totals."""
+    found = []
+    for path in sorted(CLAUDE_ROOT.glob("*/*.jsonl")):
+        observed, billed, fanout = _reconcile(path)
+        if billed > 0:
+            found.append(Reconciliation(id_short(path.stem), observed, billed, fanout))
+    return found
+
+
+# -------------------------------------------------------------------- internals
 
 
 def _growths(items: Sequence[Call]) -> Iterator[Growth]:
@@ -199,75 +311,6 @@ def _sessions_of(tooling: Iterable[Tooling]) -> dict[str, list[Tooling]]:
     return dict(grouped)
 
 
-# ----------------------------------------------------------------- cache waste
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class Waste:
-    """Cache recreation split into idle and normal churn."""
-
-    idle_tokens: int
-    idle_events: int
-    churn_tokens: int
-
-    @property
-    def total(self) -> int:
-        return self.idle_tokens + self.churn_tokens
-
-    @property
-    def premium(self) -> float:
-        return self.idle_tokens * IDLE_PREMIUM
-
-
-def calls_waste(calls: Iterable[Call], ttl: float) -> Waste:
-    """Measure cache creation after gaps longer than the cache lifetime."""
-    idle_tokens = idle_events = churn = 0
-    for items in calls_sessions(calls).values():
-        for previous, call in itertools.pairwise(items):
-            if not call.usage.cache_write:
-                continue
-            if call.at - previous.at > ttl:
-                idle_tokens += call.usage.cache_write
-                idle_events += 1
-            else:
-                churn += call.usage.cache_write
-    return Waste(idle_tokens, idle_events, churn)
-
-
-def calls_resumes(calls: Sequence[Call], ttl: float) -> int:
-    """Count cache creations after idle gaps in one session."""
-    return sum(1 for a, b in itertools.pairwise(calls) if b.usage.cache_write and b.at - a.at > ttl)
-
-
-# ------------------------------------------------------------------ the block
-
-
-def calls_block(calls: Iterable[Call], now: float) -> float | None:
-    """Return the open five-hour quota block, if one exists."""
-    start = last = None
-    for stamp in sorted(c.at for c in calls):
-        if start is None or stamp - start >= BLOCK or stamp - last >= BLOCK:
-            start = stamp - stamp % 3600
-        last = stamp
-    if start is None or now - start >= BLOCK:
-        return None
-    return start
-
-
-
-def spend_projected(spent: float, elapsed: float, remaining: float) -> float:
-    """Project spend at the end of the quota block."""
-    return spent + spent / max(elapsed, 60) * remaining
-
-
-# ------------------------------------------------------------------- billing
-
-
-def rates_solved() -> Mapping[str, tuple[float, int]]:
-    """Dollars per weighted megatoken per model, from closed sessions with no subagent traffic."""
-    return _rates_within(int(time.time() // RATES_TTL))
-
-
 @functools.cache
 def _rates_within(epoch: int) -> Mapping[str, tuple[float, int]]:
     """Solve rates, memoised per TTL-wide epoch so a live dashboard still sees cache refreshes."""
@@ -293,19 +336,6 @@ def _per_token_cost(model: str) -> float:
     return rate / 1e6
 
 
-def call_dollars(call: Call) -> float:
-    return call.weight * _per_token_cost(call.model)
-
-
-def rates_blended() -> float:
-    """One rate spanning models, weighted by sample count, not a flat per-model average."""
-    solved = list(rates_solved().values())
-    samples = sum(n for _, n in solved)
-    if not samples:
-        return 0.0
-    return sum(rate * n for rate, n in solved) / samples / 1e6
-
-
 def _cached_rates() -> Mapping[str, tuple[float, int]] | None:
     """Load a fresh, valid cached rate calculation."""
     try:
@@ -326,34 +356,6 @@ def _save_rates(solved: Mapping[str, tuple[float, int]]) -> None:
         scratch.replace(RATES_CACHE)
     except OSError:
         pass  # The cache is optional.
-
-
-# ---------------------------------------------------------------- audit
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class Reconciliation:
-    """One closed session compared with Claude's billed total."""
-
-    session: str
-    observed: float
-    billed: float
-    fanout: bool
-
-    @property
-    def unseen(self) -> float:
-        """Percent of billed tokens absent from the transcript."""
-        return 100 * (self.billed - self.observed) / self.billed
-
-
-def transcripts_audit() -> list[Reconciliation]:
-    """Return closed Claude sessions with billed totals."""
-    found = []
-    for path in sorted(CLAUDE_ROOT.glob("*/*.jsonl")):
-        observed, billed, fanout = _reconcile(path)
-        if billed > 0:
-            found.append(Reconciliation(id_short(path.stem), observed, billed, fanout))
-    return found
 
 
 def _reconcile(path: pathlib.Path) -> tuple[float, float, bool]:

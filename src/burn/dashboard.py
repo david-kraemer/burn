@@ -67,6 +67,9 @@ def snapshot_dashboard(snapshot: Snapshot, view: View, height: int = 24) -> Grou
     return Group(*body)
 
 
+# -------------------------------------------------------------------- internals
+
+
 def _masthead(snapshot: Snapshot, view: View, table: list[Row]) -> Text:
     """Render the one-line summary."""
     active = sum(1 for row in table if snapshot.at - row.last <= IDLE)

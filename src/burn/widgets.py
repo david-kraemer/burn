@@ -25,13 +25,6 @@ def widget_bar(percent: float, width: int = 8) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
-def _clamp(value: float, width: int) -> int:
-    """Round a fill amount into [0, width]; non-finite input draws empty (round() would raise)."""
-    if not math.isfinite(value):
-        return 0
-    return max(0, min(width, round(value)))
-
-
 def widget_grid(rows: Iterable[tuple[str, object]]) -> Table:
     """Render a two-column label and value block."""
     layout = Table.grid(padding=(0, 2))
@@ -50,3 +43,13 @@ def widget_columns(left: Iterable[Column], right: Iterable[Column] = ()) -> Tabl
     for name, width in right:
         table.add_column(name, width=width, justify="right", no_wrap=True)
     return table
+
+
+# -------------------------------------------------------------------- internals
+
+
+def _clamp(value: float, width: int) -> int:
+    """Round a fill amount into [0, width]; non-finite input draws empty (round() would raise)."""
+    if not math.isfinite(value):
+        return 0
+    return max(0, min(width, round(value)))

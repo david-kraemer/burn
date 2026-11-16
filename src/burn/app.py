@@ -88,6 +88,9 @@ async def console_monitor(console: Console, view: View, remote: bool = True) -> 
                         task.cancel()
 
 
+# -------------------------------------------------------------------- internals
+
+
 @contextlib.asynccontextmanager
 async def _keyboard() -> AsyncIterator[asyncio.Queue[str]]:
     """Return queued keypresses, or none when stdin is not a terminal."""
