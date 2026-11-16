@@ -205,7 +205,7 @@ def polled(monkeypatch):
 
 def test_reading_survives_cache_round_trip(polled):
     taken = quota.quota_reading()
-    assert quota._cached() == (taken, 0.0)
+    assert quota._cached() == (taken, 0.0, 0.0)
 
 
 def test_fresh_cache_skips_request(polled):
@@ -246,9 +246,9 @@ def test_stale_reading_keeps_windows_but_not_values(
 def test_corrupt_cache_returns_no_reading(polled):
     quota.quota_reading()
     quota.CACHE.write_text("{ not json")
-    assert quota._cached() == (None, 0.0)
+    assert quota._cached() == (None, 0.0, 0.0)
     quota.CACHE.write_text(json.dumps({"at": 1.0, "windows": [{"bogus": 1}]}))
-    assert quota._cached() == (None, 0.0)
+    assert quota._cached() == (None, 0.0, 0.0)
 
 
 def test_unwritable_cache_does_not_break_reading(polled, monkeypatch, tmp_path):
@@ -257,7 +257,7 @@ def test_unwritable_cache_does_not_break_reading(polled, monkeypatch, tmp_path):
     blocked.write_text("this is a file, not the cache directory")
     monkeypatch.setattr(quota, "CACHE", blocked / "quota.json")
     assert quota.quota_reading() is not None
-    assert quota._cached() == (None, 0.0)
+    assert quota._cached() == (None, 0.0, 0.0)
 
 
 def test_missing_cache_and_endpoint_return_none(monkeypatch):
@@ -275,20 +275,93 @@ def refusal(code, retry_after=None):
 
 def test_rate_limit_wait_uses_retry_after():
     assert quota._patience(refusal(429, "161")) == 161.0
+    assert quota._backoff(0.0, 161.0) == 161.0
 
 
 def test_rate_limit_without_valid_delay_uses_ttl():
-    assert quota._patience(refusal(429)) == quota.QUOTA_TTL
-    assert quota._patience(refusal(429, "soon")) == quota.QUOTA_TTL
+    assert quota._patience(refusal(429)) == 0.0
+    assert quota._patience(refusal(429, "soon")) == 0.0
+    assert quota._backoff(0.0, 0.0) == quota.QUOTA_TTL
 
 
 def test_rate_limit_delay_is_capped():
-    assert quota._patience(refusal(429, "999999")) == quota.MAX_BACKOFF
+    assert quota._backoff(0.0, quota._patience(refusal(429, "999999"))) == quota.MAX_BACKOFF
 
 
-def test_other_http_errors_do_not_delay_request():
-    assert quota._patience(refusal(401)) == 0.0
-    assert quota._patience(refusal(500)) == 0.0
+def test_any_refusal_honors_retry_after():
+    assert quota._patience(refusal(500, "600")) == 600.0
+    assert quota._patience(refusal(401, "30")) == 30.0
+
+
+def delay():
+    """Seconds from now until the shared record allows the next request."""
+    return json.loads(quota.CACHE.read_text())["retry_at"] - time.time()
+
+
+@pytest.mark.parametrize("failure", [
+    refusal(500), refusal(401), urllib.error.URLError("no route"), TimeoutError(),
+    ValueError("not json"),
+])
+def test_every_failure_delays_the_next_process(failure, monkeypatch):
+    """Not only 429 and 503: any failure must stop the next run from requesting."""
+    monkeypatch.setattr(quota, "_token", lambda: "sk-live")
+
+    def refuse(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(quota.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(quota, "_reported", REPORTED)
+    assert quota.quota_reading() is None
+    monkeypatch.setattr(quota, "_reported", lambda: pytest.fail("request made during delay"))
+    assert quota.quota_reading() is None
+    assert delay() == pytest.approx(quota.QUOTA_TTL, abs=5)
+
+
+def test_missing_token_delays_the_next_process(monkeypatch):
+    monkeypatch.setattr(quota, "_token", lambda: None)
+    monkeypatch.setattr(quota, "_reported", REPORTED)
+    quota.quota_reading()
+    monkeypatch.setattr(quota, "_reported", lambda: pytest.fail("request made during delay"))
+    quota.quota_reading()
+
+
+def expire_delay():
+    """End the current delay but keep its length, as if it had run out."""
+    record = json.loads(quota.CACHE.read_text())
+    quota.CACHE.write_text(json.dumps({**record, "retry_at": 0.0}))
+
+
+def test_failures_double_the_delay_up_to_the_cap():
+    """The delay lives in the shared record, so separate processes extend it."""
+    seen = []
+    for _ in range(5):
+        quota.quota_reading()
+        seen.append(delay())
+        expire_delay()
+    ttl, cap = quota.QUOTA_TTL, quota.MAX_BACKOFF
+    assert seen == pytest.approx([ttl, 2 * ttl, 4 * ttl, cap, cap], abs=5)
+
+
+def test_a_longer_server_wait_beats_the_doubled_delay(monkeypatch):
+    quota.quota_reading()
+    expire_delay()
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response(retry_after=700.0))
+    quota.quota_reading()
+    assert delay() == pytest.approx(700.0, abs=5)
+
+
+def test_success_resets_the_delay(monkeypatch):
+    for _ in range(3):
+        quota.quota_reading()
+        expire_delay()
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response(PAYLOAD))
+    quota.quota_reading()
+    assert quota._cached()[1:] == (0.0, 0.0)
+    record = json.loads(quota.CACHE.read_text())
+    quota.CACHE.write_text(json.dumps({**record, "at": record["at"] - quota.QUOTA_TTL}))
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response())
+    quota.quota_reading()
+    assert delay() == pytest.approx(quota.QUOTA_TTL, abs=5), "a new failure starts over"
 
 
 def test_rate_limit_delays_next_process(polled, monkeypatch):
@@ -347,6 +420,23 @@ def test_failed_request_drops_claim(polled, monkeypatch):
     with pytest.raises(ZeroDivisionError):
         quota.quota_reading()
     assert quota._leased(), "a raising request must still drop the claim"
+
+
+def test_claimant_rereads_the_record_another_process_just_saved(polled, monkeypatch):
+    """A process that checked before another one saved must not request again."""
+    quota.quota_reading()
+    monkeypatch.setattr(quota, "QUOTA_TTL", 0.0)
+    record = json.loads(quota.CACHE.read_text())
+    leased = quota._leased
+
+    def raced():
+        # Another process failed and saved its delay between the check and the claim.
+        quota.CACHE.write_text(json.dumps({**record, "retry_at": time.time() + 300}))
+        return leased()
+
+    monkeypatch.setattr(quota, "_leased", raced)
+    monkeypatch.setattr(quota, "_reported", lambda: pytest.fail("requested during delay"))
+    assert quota.quota_reading().windows
 
 
 WORKER = '''

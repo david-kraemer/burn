@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import http.client
 import json
 import os
 import pathlib
@@ -42,7 +43,7 @@ CACHE = pathlib.Path.home() / ".cache" / "burn" / "quota.json"
 QUOTA_TTL = 120.0
 # Data older than this interval keeps its window shape. It does not keep its values.
 QUOTA_STALE = 900.0
-# Maximum delay after a rate-limit response.
+# Maximum delay after a failed request. Delays double from QUOTA_TTL up to it.
 MAX_BACKOFF = 900.0
 
 # Window names in shortest-first order. Put unknown names last.
@@ -57,17 +58,22 @@ def quota_reading() -> Reading | None:
     Return the last window shape if a request fails. Mark its values as
     pending if the data is stale.
     """
-    stored, blocked = _cached()
+    stored, blocked, _ = _cached()
     now = time.time()
     # Draw current data and blocked data as they stand. TTL is shorter than
     # STALE. Current data is never marked pending.
     if not _due(stored, blocked, now) or not _leased():
         return _usable(stored)
     try:
-        answer = _reported()
+        # Another process can save between the check and the claim. Read the
+        # record again under the claim, so its backoff is the shared one.
+        stored, blocked, backoff = _cached()
+        if not _due(stored, blocked, now):
+            return _usable(stored)
+        # Save before the claim drops, so the next claimant reads this answer.
+        return _recorded(_reported(), stored, backoff, now)
     finally:
         _release()
-    return _recorded(answer, stored, now)
 
 
 def quota_shape() -> Reading | None:
@@ -77,7 +83,11 @@ def quota_shape() -> Reading | None:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Response:
-    """Result from one quota request."""
+    """Result from one quota request.
+
+    No payload means the request failed. ``retry_after`` is the wait the
+    server asked for, if any.
+    """
 
     payload: dict | None = None
     retry_after: float = 0.0
@@ -100,16 +110,29 @@ def _usable(stored: Reading | None) -> Reading | None:
     return dataclasses.replace(stored, pending=True)
 
 
-def _recorded(answer: Response, stored: Reading | None, now: float) -> Reading | None:
-    """Save one response and return the data to draw."""
-    if answer.retry_after:
-        _save(stored, retry_at=now + answer.retry_after)
-        return _usable(stored)
+def _recorded(
+    answer: Response, stored: Reading | None, backoff: float, now: float
+) -> Reading | None:
+    """Save one response and return the data to draw.
+
+    A failure of any kind delays the next request from every process. A
+    success clears the delay.
+    """
     if answer.payload is None:
+        delay = _backoff(backoff, answer.retry_after)
+        _save(stored, retry_at=now + delay, backoff=delay)
         return _usable(stored)
     taken = Reading(at=now, windows=_windows(answer.payload), spend=_spend(answer.payload))
     _save(taken)
     return taken
+
+
+def _backoff(last: float, asked: float) -> float:
+    """Return the delay after a failure: double the last delay, at least QUOTA_TTL.
+
+    A longer wait asked for by the server wins. MAX_BACKOFF caps both.
+    """
+    return min(max(asked, 2 * last, QUOTA_TTL), MAX_BACKOFF)
 
 
 def _reported() -> Response:
@@ -135,7 +158,7 @@ def _reported() -> Response:
         # Several one-shot runs can exceed the endpoint limit. Respect the
         # requested wait time.
         return Response(retry_after=_patience(refused))
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ValueError, OSError):
         return Response()
 
 
@@ -145,14 +168,11 @@ def _answered(payload: object) -> dict | None:
 
 
 def _patience(refused: urllib.error.HTTPError) -> float:
-    """Return the requested wait time within the allowed range."""
-    if refused.code not in (429, 503):
-        return 0.0
+    """Return the wait in seconds that a refusal asks for, or zero."""
     try:
-        asked = float((refused.headers or {}).get("Retry-After") or 0.0)
+        return max(float((refused.headers or {}).get("Retry-After") or 0.0), 0.0)
     except (TypeError, ValueError):
-        asked = 0.0
-    return min(max(asked, QUOTA_TTL), MAX_BACKOFF)
+        return 0.0
 
 
 def _token() -> str | None:
@@ -227,25 +247,29 @@ def _money(amount: dict) -> float:
     return amount["amount_minor"] / 10 ** amount.get("exponent", 2)
 
 
-def _cached() -> tuple[Reading | None, float]:
-    """Return the last saved reading and the next request time."""
+def _cached() -> tuple[Reading | None, float, float]:
+    """Return the last saved reading, the next request time, and the last delay."""
     try:
         stored = json.loads(CACHE.read_text())
     except (OSError, ValueError):
-        return None, 0.0  # Request new data for missing or invalid data.
+        return None, 0.0, 0.0  # Request new data for missing or invalid data.
     if not isinstance(stored, dict):
-        return None, 0.0
-    blocked = float(stored.get("retry_at") or 0.0)
+        return None, 0.0, 0.0
+    try:
+        blocked = float(stored.get("retry_at") or 0.0)
+        backoff = float(stored.get("backoff") or 0.0)
+    except (TypeError, ValueError):
+        blocked = backoff = 0.0
     if not stored.get("at"):
-        return None, blocked  # A rate-limit response occurred before a reading.
+        return None, blocked, backoff  # A request failed before the first reading.
     try:
         return Reading(
             at=float(stored["at"]),
             windows=tuple(Quota(**window) for window in stored["windows"]),
             spend=Spend(**stored["spend"]) if stored.get("spend") else None,
-        ), blocked
+        ), blocked, backoff
     except (ValueError, TypeError, KeyError):
-        return None, blocked
+        return None, blocked, backoff
 
 
 def _leased() -> bool:
@@ -279,24 +303,29 @@ def _release() -> None:
         CACHE.with_suffix(".lease").unlink(missing_ok=True)
 
 
-def _save(taken: Reading | None, retry_at: float = 0.0) -> None:
+def _save(taken: Reading | None, retry_at: float = 0.0, backoff: float = 0.0) -> None:
     """Save a reading with a temporary file."""
     try:
         CACHE.parent.mkdir(parents=True, exist_ok=True)
         scratch = CACHE.with_suffix(f".{os.getpid()}.tmp")
-        scratch.write_text(json.dumps(_record(taken, retry_at)))
+        scratch.write_text(json.dumps(_record(taken, retry_at, backoff)))
         scratch.replace(CACHE)
     except OSError:
         pass  # The cache is optional.
 
 
-def _record(taken: Reading | None, retry_at: float = 0.0) -> dict:
-    """Convert a reading to JSON-compatible values."""
+def _record(taken: Reading | None, retry_at: float = 0.0, backoff: float = 0.0) -> dict:
+    """Convert a reading to JSON-compatible values.
+
+    ``retry_at`` is when any process may request next; ``backoff`` is the
+    delay that set it, which the next failure doubles.
+    """
     if taken is None:
-        return {"at": None, "windows": [], "spend": None, "retry_at": retry_at}
+        return {"at": None, "windows": [], "spend": None, "retry_at": retry_at, "backoff": backoff}
     return {
         "at": taken.at,
         "windows": [dataclasses.asdict(window) for window in taken.windows],
         "spend": dataclasses.asdict(taken.spend) if taken.spend is not None else None,
         "retry_at": retry_at,
+        "backoff": backoff,
     }
