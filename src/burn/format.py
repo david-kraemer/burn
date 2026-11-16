@@ -5,8 +5,13 @@ from __future__ import annotations
 import datetime
 import itertools
 import re
+import time
 
 SPARK = "▁▂▃▄▅▆▇█"
+
+# Widest seconds_span output: "10d03h". Wider spans push the row out by one.
+SPAN_WIDTH = 6
+COUNTDOWN_WIDTH = len("in ") + SPAN_WIDTH
 
 
 def number_quantity(value: float) -> str:
@@ -36,19 +41,28 @@ def seconds_span(seconds: float) -> str:
     return f"{mins}m" if minutes else f"{int(seconds)}s"
 
 
-def epoch_deadline(epoch: float | None, now: float) -> str:
-    """Format a reset time: the clock alone today, its date and the time left otherwise.
+def epoch_deadline(epoch: float | None) -> str:
+    """Format a reset time in full, local, at a fixed width: ``Sat Nov 21  1:00 AM EST``.
 
-    A weekly window's reset is days away; a bare clock reading cannot say
-    which day it means.
+    Always dated, even today: a weekly reset is days away, and rows that
+    switch between bare and dated forms do not line up. Day and hour are
+    space-padded so stacked rows align.
     """
     if epoch is None:
-        return "?"
+        # Same width as a real reading; the zone name sets it, so ask the zone.
+        return "?".ljust(len(epoch_deadline(time.time())))
     local = datetime.datetime.fromtimestamp(epoch, datetime.UTC).astimezone()
-    if local.date() == datetime.datetime.fromtimestamp(now, datetime.UTC).astimezone().date():
-        return _clock(epoch)
-    dated = f"{local:%a %b} {local.day} {_clock(epoch)}"
-    return f"{dated} (in {seconds_span(epoch - now)})" if epoch > now else dated
+    hour = local.hour % 12 or 12
+    return f"{local:%a %b} {local.day:>2} {hour:>2}:{local:%M %p %Z}"
+
+
+def epoch_countdown(epoch: float | None, now: float) -> str:
+    """Format the time until ``epoch`` at a fixed width: ``in  4d12h`` or ``  3m ago``."""
+    if epoch is None:
+        return "?".ljust(COUNTDOWN_WIDTH)
+    if epoch >= now:
+        return f"in {seconds_span(epoch - now):>{SPAN_WIDTH}}"
+    return f"{seconds_span(now - epoch):>{SPAN_WIDTH}} ago"
 
 
 def iso_epoch(text: str | None) -> float | None:
@@ -110,16 +124,3 @@ def series_resample(series: list[float], width: int) -> list[float]:
         sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1)
         for lo, hi in itertools.pairwise(edges)
     ]
-
-
-# -------------------------------------------------------------------- internals
-
-
-def _clock(epoch: float | None) -> str:
-    """Format a Unix timestamp as a local time carrying its meridiem and zone."""
-    if epoch is None:
-        return "?"
-    local = datetime.datetime.fromtimestamp(epoch, datetime.UTC).astimezone()
-    # %I is zero-padded and has no portable unpadded form, and 01-12 never
-    # strips away to nothing.
-    return f"{local:%I:%M%p %Z}".lstrip("0")

@@ -214,28 +214,27 @@ def local(*fields):
     return datetime.datetime(*fields).timestamp()
 
 
-def test_a_reset_later_today_is_a_bare_clock_reading():
-    from burn.format import _clock, epoch_deadline
-
-    now = local(2026, 11, 16, 9, 0)
-    assert epoch_deadline(local(2026, 11, 16, 15, 30), now) == _clock(local(2026, 11, 16, 15, 30))
-
-
-def test_a_reset_on_a_later_day_carries_its_date_and_the_time_left():
-    from burn.format import _clock, epoch_deadline
-
-    now = local(2026, 11, 16, 9, 0)
-    later = now + 3 * 86400 + 4 * 3600
-    shown = epoch_deadline(later, now)
-    assert shown.startswith("Thu Nov 19 ") and _clock(later) in shown
-    assert shown.endswith("(in 3d04h)")
-
-
-def test_a_reset_already_passed_on_an_earlier_day_has_no_countdown():
+def test_a_reset_today_still_carries_its_date():
     from burn.format import epoch_deadline
 
-    shown = epoch_deadline(local(2026, 11, 14, 9, 0), local(2026, 11, 16, 9, 0))
-    assert shown.startswith("Sat Nov 14 ") and "(in" not in shown
+    assert epoch_deadline(local(2026, 11, 16, 15, 30)).startswith("Mon Nov 16  3:30 PM ")
+
+
+def test_reset_times_have_one_width():
+    from burn.format import epoch_deadline
+
+    times = [local(2026, 11, 2, 1, 5), local(2026, 11, 21, 12, 59), local(2026, 11, 16, 9, 0)]
+    assert len({len(epoch_deadline(t)) for t in [*times, None]}) == 1
+
+
+def test_countdowns_have_one_width():
+    from burn.format import COUNTDOWN_WIDTH, epoch_countdown
+
+    now = local(2026, 11, 16, 9, 0)
+    shown = [epoch_countdown(now + s, now) for s in (30, 45 * 60, 3 * 3600, 4 * 86400 + 12 * 3600)]
+    assert shown[-1] == "in  4d12h"
+    assert {len(text) for text in shown} == {COUNTDOWN_WIDTH}
+    assert epoch_countdown(now - 180, now) == "    3m ago"
 
 
 def test_a_weekly_quota_meter_says_which_day_it_resets(busy, snapshot):
@@ -247,11 +246,20 @@ def test_a_weekly_quota_meter_says_which_day_it_resets(busy, snapshot):
     frame = plain(snapshot_dashboard(snapshot(at=now, calls=busy.calls, reading=reading), View()))
     (five,) = [line for line in frame.splitlines() if "Claude 5h" in line]
     (week,) = [line for line in frame.splitlines() if "Claude week" in line]
-    assert "Nov" not in five
-    assert "Thu Nov 19" in week and "(in 3d00h)" in week
+    assert "Mon Nov 16 10:00 AM" in five and "in  1h00m" in five
+    assert "Thu Nov 19  9:00 AM" in week and "in  3d00h" in week
+    assert five.index("resets") == week.index("resets")
 
 
 def test_a_codex_gauge_resetting_on_another_day_carries_its_date(snapshot):
     now = local(2026, 11, 16, 9, 0)
     gauge = Gauge(used_percent=5.0, window_minutes=10080, resets_at=now + 2 * 86400)
     assert "Wed Nov 18" in plain(snapshot_dashboard(snapshot(at=now, gauges=[gauge]), View()))
+
+
+def test_scope_and_governing_trail_the_reset_columns(busy, snapshot):
+    frame = plain(snapshot_dashboard(snapshot(calls=busy.calls, reading=REPORTED), View()))
+    rows = [line for line in frame.splitlines() if line.startswith("Claude ") and "resets" in line]
+    assert len({line.index("resets") for line in rows}) == 1
+    assert len({line.index(" in ") for line in rows}) == 1
+    assert all(line.index("Fable") > line.index(" in ") for line in rows if "Fable" in line)

@@ -10,6 +10,7 @@ from rich.text import Text
 
 from .analysis import call_dollars, calls_block, calls_lanes, spend_projected
 from .format import (
+    epoch_countdown,
     epoch_deadline,
     model_label,
     number_quantity,
@@ -115,7 +116,8 @@ def _quota_meter(window: Quota, now: float, unread: bool = False) -> Text:
     """Render one Anthropic quota window.
 
     If a window is pending, keep its row and width. Show no value until the
-    request completes. A reset on a later day carries its date.
+    request completes. The reset columns are fixed-width; the scope and the
+    governing mark trail them so they cannot push the times out of line.
     """
     if unread:
         return Text.assemble(
@@ -128,8 +130,8 @@ def _quota_meter(window: Quota, now: float, unread: bool = False) -> Text:
         (f"Claude {window.name:<5.5}", "cyan"),
         widget_meter(window.used_percent / 100, METER_WIDTH, percent_tint(window.used_percent)),
         f" {window.used_percent:5.1f}%",
+        (_reset(window.resets_at, now), "dim"),
         (f"  {window.scope}", "dim") if window.scope else "",
-        (f"  resets {epoch_deadline(window.resets_at, now)}", "dim"),
         ("  governing", "yellow") if window.active else "",
     )
 
@@ -191,7 +193,7 @@ def _codex_meters(snapshot: Snapshot) -> list[Text]:
             (f"Codex {seconds_span(gauge.window_minutes * 60):>4} ", "magenta"),
             widget_meter(gauge.used_percent / 100, METER_WIDTH, percent_tint(gauge.used_percent)),
             f" {gauge.used_percent:5.1f}%",
-            (f"  resets {epoch_deadline(gauge.resets_at, snapshot.at)}", "dim"),
+            (_reset(gauge.resets_at, snapshot.at), "dim"),
         )
         for gauge in snapshot.gauges
     ]
@@ -334,3 +336,8 @@ def _heading(name: str, view: View) -> Text:
         if column == name and view.sort == field:
             return Text(name + ("▼" if view.reverse else "▲"), style="black on cyan")
     return Text(name)
+
+
+def _reset(epoch: float | None, now: float) -> str:
+    """The reset columns shared by every quota row: when, then how long until."""
+    return f"  resets {epoch_deadline(epoch)}  {epoch_countdown(epoch, now)}"
