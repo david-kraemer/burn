@@ -54,7 +54,16 @@ def epoch_deadline(epoch: float | None) -> str:
         # Same width as a real reading; the zone name sets it, so ask the zone.
         return "?".ljust(len(epoch_deadline(time.time())))
     local = datetime.datetime.fromtimestamp(epoch, datetime.UTC).astimezone()
-    return f"{local:%a %b} {local.day:>2} {local:%H:%M %Z}"
+    return f"{epoch_stamp(epoch)} {local:%Z}"
+
+
+def epoch_stamp(epoch: float) -> str:
+    """Format a past or future time, local, dated, at a fixed width: ``Sat Nov 21 01:00``.
+
+    The zone-free form of :func:`epoch_deadline`, for columns of local times.
+    """
+    local = datetime.datetime.fromtimestamp(epoch, datetime.UTC).astimezone()
+    return f"{local:%a %b} {local.day:>2} {local:%H:%M}"
 
 
 def epoch_countdown(epoch: float | None, now: float) -> str:

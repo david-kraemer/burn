@@ -79,9 +79,9 @@ for the same output on a terminal. Block characters map one for one to ASCII
 (`█` to `#`, `·` to `-`, sparkline levels to `_.:~=+*#`), so columns stay
 aligned.
 
-Quota reset times show the clock alone when the reset is later today. A
-reset on another day shows its date and the time left, for example
-`Thu Nov 19 5:59AM EST (in 3d04h)`.
+Times are always dated, on a 24-hour local clock. Quota resets show the
+zone and the time left, for example `Thu Nov 19 05:59 EST  in  3d04h`;
+`burn turns` shows when each turn started, for example `Sat Nov 14 23:50`.
 
 ## Live-view controls
 

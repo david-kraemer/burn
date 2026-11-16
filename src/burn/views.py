@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import collections
-import datetime
 
 from rich.console import Group, RenderableType
 from rich.text import Text
@@ -19,6 +18,7 @@ from .analysis import (
     transcripts_audit,
 )
 from .format import (
+    epoch_stamp,
     model_label,
     number_quantity,
     percent_tint,
@@ -84,7 +84,7 @@ def report_turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
         return Text("No prompts captured in this window.", style="dim")
 
     table = widget_columns(
-        [("WHEN", 5), ("SESSION", 12)], [("CALLS", 5), ("WEIGHT", 7), ("COST", 6)]
+        [("WHEN", 16), ("SESSION", 12)], [("CALLS", 5), ("WEIGHT", 7), ("COST", 6)]
     )
     table.add_column("PROMPT", width=38, no_wrap=True)
 
@@ -94,7 +94,7 @@ def report_turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
     for (session, prompt), items in ranked[:top]:
         cost = sum(call_dollars(c) for c in items)
         table.add_row(
-            f"{datetime.datetime.fromtimestamp(items[0].at, datetime.UTC).astimezone():%H:%M}",
+            epoch_stamp(items[0].at),
             session,
             str(len(items)),
             Text(number_quantity(sum(c.weight for c in items)), style="bold"),

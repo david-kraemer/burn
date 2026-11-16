@@ -274,3 +274,16 @@ def test_scope_and_governing_trail_the_reset_columns(busy, snapshot):
     assert len({DATED.search(line).start() for line in rows}) == 1
     assert len({COUNTDOWN.search(line).start() for line in rows}) == 1
     assert all(line.index("Fable") > line.index(" in ") for line in rows if "Fable" in line)
+
+
+def test_turns_spanning_days_carry_their_dates(snapshot, call):
+    """A bare clock cannot order turns from different days."""
+    calls = [
+        call(at=local(2026, 11, 14, 23, 50), session="aaa", prompt="saturday night"),
+        call(at=local(2026, 11, 16, 9, 5), session="bbb", prompt="monday morning"),
+    ]
+    frame = plain(views.report_turns(snapshot(at=local(2026, 11, 16, 9, 10), calls=calls)))
+    (saturday,) = [line for line in frame.splitlines() if "saturday night" in line]
+    (monday,) = [line for line in frame.splitlines() if "monday morning" in line]
+    assert saturday.startswith("Sat Nov 14 23:50")
+    assert monday.startswith("Mon Nov 16 09:05")
