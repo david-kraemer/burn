@@ -73,6 +73,8 @@ class Tailer:
         self._carry: dict[pathlib.Path, Carry] = {}
         self._calls: dict[str, Call] = {}
         self._tools: list[Tooling] = []
+        # Calls and tools older than this were forgotten; every later one is held.
+        self._cutoff = 0.0
         self._gauges: tuple[Gauge, ...] = ()
         self._gauges_at = ""
         self._remote = remote
@@ -87,7 +89,12 @@ class Tailer:
         quota data. If the wait expires, leave the request for the next frame.
         """
         now = time.time()
-        horizon = now - (max(window, 300) + 60) * 60
+        span = max(window, 300) * 60
+        if now - span < self._cutoff:
+            # A wider window reaches calls already forgotten, in files whose
+            # offsets have moved past them. Read every file again from the start.
+            self._rewind()
+        horizon = now - span - 3600
         self._poll(now)
         for path, offset, fragment in await asyncio.to_thread(self._read, horizon):
             self._offsets[path] = offset
@@ -95,9 +102,8 @@ class Tailer:
         if settle and self._polling is not None:
             await asyncio.wait({self._polling}, timeout=settle)
             self._collect()
-        # Retain double the window: a widen ("+") must still find data whose
-        # byte offset has already advanced past it.
-        self._forget(now - max(window, 300) * 60 * 2)
+        # Retain double the window, so one widen ("+") needs no re-read.
+        self._forget(now - span * 2)
         return Snapshot(
             at=now,
             calls=tuple(sorted(self._calls.values(), key=lambda c: c.at)),
@@ -170,6 +176,18 @@ class Tailer:
     def _forget(self, cutoff: float) -> None:
         self._calls = {tag: c for tag, c in self._calls.items() if c.at >= cutoff}
         self._tools = [t for t in self._tools if t.at >= cutoff]
+        self._cutoff = max(self._cutoff, cutoff)
+
+    def _rewind(self) -> None:
+        """Drop everything read, so the next read starts each file over.
+
+        Re-reading only some files would add their retained tools twice.
+        """
+        self._offsets.clear()
+        self._carry.clear()
+        self._calls.clear()
+        self._tools.clear()
+        self._cutoff = 0.0
 
 
 def claude_usage(usage: dict) -> Usage:

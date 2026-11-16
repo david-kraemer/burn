@@ -406,3 +406,43 @@ def test_codex_repeat_split_across_reads_is_still_one_request():
     carry = Carry(session="s")
     assert len(_read_codex([token_count("2026-11-03T20:51:49Z", usage, usage)], carry).calls) == 1
     assert _read_codex([token_count("2026-11-03T20:51:51Z", usage, usage)], carry).calls == ()
+
+
+def stamped(seconds_ago):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds_ago))
+
+
+def test_widening_past_the_retained_span_finds_the_old_calls(trees):
+    """Four doublings of "+" reach back past what a narrow window kept."""
+    path = trees / "-proj" / "session-one-two-three.jsonl"
+    days = 2 * 86400
+    used = {"type": "tool_use", "id": "t1", "name": "Bash"}
+    result = {"type": "user", "timestamp": stamped(30), "sessionId": "session-one",
+              "message": {"content": [{"type": "tool_result", "tool_use_id": "t1"}]}}
+    appended(
+        path,
+        claude_assistant(timestamp=stamped(days), requestId="old", message={"id": "m-old"}),
+        recent(message={"content": [used]}),
+        result,
+    )
+    tailer = Tailer(remote=False)
+    narrow = asyncio.run(tailer.sample(60))
+    assert len(narrow.calls) == 1, "a narrow window forgets the call from two days ago"
+    wide = asyncio.run(tailer.sample(4 * 1440))
+    assert sorted(c.at for c in wide.calls)[0] < time.time() - days + 60
+    assert len(wide.calls) == 2
+    assert [t.name for t in wide.tools] == ["Bash"], "a re-read must not count a tool twice"
+
+
+def test_widening_within_the_retained_span_does_not_re_read(trees, monkeypatch):
+    from burn import ingest
+
+    path = trees / "-proj" / "session-one-two-three.jsonl"
+    appended(path, recent())
+    tailer = Tailer(remote=False)
+    asyncio.run(tailer.sample(300))
+    offsets = []
+    tail = ingest._tail
+    monkeypatch.setattr(ingest, "_tail", lambda p, o: offsets.append(o) or tail(p, o))
+    asyncio.run(tailer.sample(600))
+    assert offsets and 0 not in offsets
