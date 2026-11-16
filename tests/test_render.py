@@ -217,7 +217,7 @@ def local(*fields):
 def test_a_reset_today_still_carries_its_date():
     from burn.format import epoch_deadline
 
-    assert epoch_deadline(local(2026, 11, 16, 15, 30)).startswith("Mon Nov 16  3:30 PM ")
+    assert epoch_deadline(local(2026, 11, 16, 15, 30)).startswith("Mon Nov 16 15:30 ")
 
 
 def test_reset_times_have_one_width():
@@ -246,8 +246,8 @@ def test_a_weekly_quota_meter_says_which_day_it_resets(busy, snapshot):
     frame = plain(snapshot_dashboard(snapshot(at=now, calls=busy.calls, reading=reading), View()))
     (five,) = [line for line in frame.splitlines() if "Claude 5h" in line]
     (week,) = [line for line in frame.splitlines() if "Claude week" in line]
-    assert "Mon Nov 16 10:00 AM" in five and "in  1h00m" in five
-    assert "Thu Nov 19  9:00 AM" in week and "in  3d00h" in week
+    assert "Mon Nov 16 10:00 " in five and "in  1h00m" in five
+    assert "Thu Nov 19 09:00 " in week and "in  3d00h" in week
     assert five.index("resets") == week.index("resets")
 
 

@@ -44,18 +44,17 @@ def seconds_span(seconds: float) -> str:
 
 
 def epoch_deadline(epoch: float | None) -> str:
-    """Format a reset time in full, local, at a fixed width: ``Sat Nov 21  1:00 AM EST``.
+    """Format a reset time in full, local, at a fixed width: ``Sat Nov 21 01:00 EST``.
 
     Always dated, even today: a weekly reset is days away, and rows that
-    switch between bare and dated forms do not line up. Day and hour are
-    space-padded so stacked rows align.
+    switch between bare and dated forms do not line up. The day is
+    space-padded and the clock is 24-hour, zero-padded, so stacked rows align.
     """
     if epoch is None:
         # Same width as a real reading; the zone name sets it, so ask the zone.
         return "?".ljust(len(epoch_deadline(time.time())))
     local = datetime.datetime.fromtimestamp(epoch, datetime.UTC).astimezone()
-    hour = local.hour % 12 or 12
-    return f"{local:%a %b} {local.day:>2} {hour:>2}:{local:%M %p %Z}"
+    return f"{local:%a %b} {local.day:>2} {local:%H:%M %Z}"
 
 
 def epoch_countdown(epoch: float | None, now: float) -> str:
