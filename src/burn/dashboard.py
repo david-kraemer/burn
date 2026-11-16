@@ -20,8 +20,8 @@ from .format import (
     text_trim,
 )
 from .keys import BINDINGS, HELP_TEXT
-from .model import BLOCK, CLAUDE, CODEX, Quota, Row, Snapshot, Spend
-from .state import FILTER, HELP, SORTS, TOOLS, View, table_viewport, view_cursor, view_rows
+from .model import BLOCK, Quota, Row, Snapshot, Source, Spend
+from .state import SORTS, Panel, View, table_viewport, view_cursor, view_rows
 from .views import report_tools, report_turns
 from .widgets import widget_meter
 
@@ -35,7 +35,7 @@ ZOOM_LINES = 13
 # meters separately. The number of windows can change.
 CHROME = 10
 
-AGENT_STYLE = {CLAUDE: "cyan", CODEX: "magenta"}
+AGENT_STYLE = {Source.CLAUDE: "cyan", Source.CODEX: "magenta"}
 FRESH = 20  # a session first seen this recently is highlighted
 IDLE = 120  # a session silent this long is dimmed
 
@@ -46,7 +46,7 @@ UNREAD = "      ·"
 def snapshot_dashboard(snapshot: Snapshot, view: View, height: int = 24) -> Group:
     """Render meters, burn history, the session table, and key bar."""
     table = view_rows(view, snapshot)
-    if view.mode == HELP:
+    if view.helping:
         return Group(_masthead(snapshot, view, table), Text(""), _helpscreen(), _keybar(view))
 
     at = view_cursor(view, table)
@@ -159,7 +159,7 @@ def _local_meter(snapshot: Snapshot, view: View) -> Text:
     This meter measures weighted tokens. It does not measure account quota. If
     ``--limit`` is not set, show elapsed time. Reported quota windows replace it.
     """
-    made = [c for c in snapshot.calls if c.source == CLAUDE]
+    made = snapshot.from_agent(Source.CLAUDE).calls
     start = calls_block(made, snapshot.at)
     if start is None:
         return Text.assemble(("Claude 5h ", "cyan"), ("  idle", "dim"))
@@ -281,7 +281,7 @@ def _zoom(snapshot: Snapshot, view: View, table: list[Row], at: int) -> Renderab
     )
     if not picked.calls:
         return Text(f"  {chosen}: no calls in this window", style="dim")
-    detail = report_turns(picked, 6) if view.panel != TOOLS else report_tools(picked, 6)
+    detail = report_tools(picked, 6) if view.panel is Panel.TOOLS else report_turns(picked, 6)
     # Keyed by session, not Row.key: attribution needs the whole call
     # sequence, spanning every project row the session tabulated into.
     projects = {c.project for c in picked.calls}
@@ -316,7 +316,7 @@ def _helpscreen() -> RenderableType:
 
 def _keybar(view: View) -> Text:
     """Render the key bar."""
-    if view.mode == FILTER:
+    if view.filtering:
         return Text.assemble(
             ("filter", "black on yellow"),
             " ",

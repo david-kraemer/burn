@@ -7,7 +7,7 @@ import time
 import pytest
 
 import burn
-from burn import Gauge, Quota, Reading, Snapshot, Spend, Usage, View, ingest
+from burn import Gauge, Quota, Reading, Snapshot, Source, Spend, Usage, View, ingest
 
 LEGACY_KEYS = {"at", "window_minutes", "quota", "spend", "sessions"}
 QUOTA_KEYS = {"name", "group", "used_percent", "resets_at", "scope", "active"}
@@ -76,7 +76,7 @@ def record(message_id, session="11111111-2222-3333"):
 def tree(monkeypatch, tmp_path):
     """An empty Claude tree and a log of every (file, offset) the Tailer reads from."""
     root = tmp_path / "claude"
-    monkeypatch.setattr(ingest, "TREES", ((root, ingest.CLAUDE, "*/*.jsonl"),))
+    monkeypatch.setattr(ingest, "TREES", ((root, Source.CLAUDE, "*/*.jsonl"),))
     reads = []
     tail = ingest._tail
     monkeypatch.setattr(

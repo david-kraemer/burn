@@ -8,7 +8,7 @@ import time
 import pytest
 
 from burn.ingest import Carry, Tailer, _read_claude, _read_codex, _tail
-from burn.model import CODEX
+from burn.model import Source
 
 
 def claude_assistant(**overrides):
@@ -121,7 +121,7 @@ def test_codex_call_inherits_model_and_project_from_earlier_headers():
         carry,
     )
     (_, call), = fragment.calls
-    assert (call.model, call.project, call.source) == ("gpt-5.6-luna", "spade", CODEX)
+    assert (call.model, call.project, call.source) == ("gpt-5.6-luna", "spade", Source.CODEX)
     # Codex reports cached tokens inside the input count. Burn splits them out.
     assert (call.usage.input, call.usage.cache_read) == (10, 90)
 
@@ -342,7 +342,7 @@ def trees(monkeypatch, tmp_path):
 
     root = tmp_path / "claude"
     monkeypatch.setattr(
-        ingest, "TREES", tuple((root, s, p) for _, s, p in ingest.TREES if s == ingest.CLAUDE)
+        ingest, "TREES", tuple((root, s, p) for _, s, p in ingest.TREES if s == Source.CLAUDE)
     )
     return root
 

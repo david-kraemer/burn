@@ -3,7 +3,7 @@
 from burn.analysis import snapshot_table
 from burn.keys import key_apply
 from burn.model import Usage
-from burn.state import FILTER, HELP, MAX_WINDOW, MIN_WINDOW, TABLE, TOOLS, TURNS, View, view_cursor
+from burn.state import MAX_WINDOW, MIN_WINDOW, Mode, Panel, View, view_cursor
 
 
 def table(snapshot, call, sessions=("aaa", "bbb", "ccc")):
@@ -90,8 +90,8 @@ def test_a_session_split_across_projects_does_not_trap_the_cursor(snapshot, call
 
 def test_t_swaps_the_zoom_pane(snapshot, call):
     rows = table(snapshot, call)
-    assert press(View(), rows, "t").panel == TURNS
-    assert press(View(), rows, "t", "t").panel == TOOLS
+    assert press(View(), rows, "t").panel == Panel.TURNS
+    assert press(View(), rows, "t", "t").panel == Panel.TOOLS
 
 
 def test_s_cycles_the_sort_column_both_ways(snapshot, call):
@@ -117,9 +117,9 @@ def test_the_window_doubles_and_halves_within_bounds(snapshot, call):
 def test_filter_mode_takes_text_and_enter_accepts_it(snapshot, call):
     rows = table(snapshot, call)
     typed = press(View(), rows, "/", "b", "u", "r", "n")
-    assert typed.mode == FILTER and typed.draft == "burn"
+    assert typed.mode == Mode.FILTER and typed.draft == "burn"
     accepted = press(typed, rows, "\r")
-    assert accepted.needle == "burn" and accepted.mode == TABLE
+    assert accepted.needle == "burn" and accepted.mode == Mode.TABLE
 
 
 def test_escape_abandons_the_draft_and_keeps_the_old_filter(snapshot, call):
@@ -141,8 +141,8 @@ def test_q_is_a_letter_while_filtering_not_a_quit(snapshot, call):
 
 def test_any_key_dismisses_help(snapshot, call):
     rows = table(snapshot, call)
-    assert press(View(), rows, "h").mode == HELP
-    assert press(View(), rows, "h", "x").mode == TABLE
+    assert press(View(), rows, "h").mode == Mode.HELP
+    assert press(View(), rows, "h", "x").mode == Mode.TABLE
 
 
 def test_c_clears_the_filter_zoom_and_agent(snapshot, call):

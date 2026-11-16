@@ -11,14 +11,11 @@ from collections.abc import Sequence
 from .model import Row
 from .state import (
     AGENTS,
-    FILTER,
-    HELP,
     MAX_WINDOW,
     MIN_WINDOW,
     SORTS,
-    TABLE,
-    TOOLS,
-    TURNS,
+    Mode,
+    Panel,
     View,
     view_cursor,
 )
@@ -62,10 +59,10 @@ HELP_TEXT = (
 
 def key_apply(key: str, view: View, table: Sequence[Row]) -> View | None:
     """Return the next view, or None to quit."""
-    if view.mode == FILTER:
+    if view.filtering:
         return _typing(key, view)
-    if view.mode == HELP:
-        return dataclasses.replace(view, mode=TABLE)
+    if view.helping:
+        return dataclasses.replace(view, mode=Mode.TABLE)
     return _command(key, view, table)
 
 
@@ -75,9 +72,9 @@ def key_apply(key: str, view: View, table: Sequence[Row]) -> View | None:
 def _typing(key: str, view: View) -> View:
     """Filter-entry state."""
     if key in ENTER:
-        return dataclasses.replace(view, needle=view.draft, mode=TABLE)
+        return dataclasses.replace(view, needle=view.draft, mode=Mode.TABLE)
     if key == ESCAPE:
-        return dataclasses.replace(view, draft="", mode=TABLE)
+        return dataclasses.replace(view, draft="", mode=Mode.TABLE)
     if key in BACKSPACE:
         return dataclasses.replace(view, draft=view.draft[:-1])
     return dataclasses.replace(view, draft=view.draft + key) if key.isprintable() else view
@@ -89,7 +86,7 @@ def _command(key: str, view: View, table: Sequence[Row]) -> View | None:
         case k if k in QUIT:
             return None
         case "h" | "?":
-            return dataclasses.replace(view, mode=HELP)
+            return dataclasses.replace(view, mode=Mode.HELP)
         case " ":
             return dataclasses.replace(view, paused=not view.paused)
         case k if k in DOWN:
@@ -99,13 +96,14 @@ def _command(key: str, view: View, table: Sequence[Row]) -> View | None:
         case k if k in ENTER:
             return dataclasses.replace(view, zoomed=not view.zoomed, selected=_step(view, table, 0))
         case "t":
-            return dataclasses.replace(view, panel=TURNS if view.panel == TOOLS else TOOLS)
+            flipped = Panel.TURNS if view.panel is Panel.TOOLS else Panel.TOOLS
+            return dataclasses.replace(view, panel=flipped)
         case "s" | "S":
             return dataclasses.replace(view, sort=_cycle(view.sort, +1 if key == "s" else -1))
         case "r":
             return dataclasses.replace(view, reverse=not view.reverse)
         case "/":
-            return dataclasses.replace(view, mode=FILTER, draft=view.needle)
+            return dataclasses.replace(view, mode=Mode.FILTER, draft=view.needle)
         case "a":
             following = AGENTS[(AGENTS.index(view.source) + 1) % len(AGENTS)]
             return dataclasses.replace(view, source=following)

@@ -6,7 +6,7 @@ from rich.console import Console
 from burn import views
 from burn.dashboard import _scrollbar, snapshot_dashboard
 from burn.model import Gauge, Quota, Reading, Snapshot, Spend, Usage
-from burn.state import HELP, TURNS, View, table_viewport
+from burn.state import Mode, Panel, View, table_viewport
 
 
 def plain(renderable, width=120, height=40):
@@ -42,9 +42,9 @@ def busy(snapshot, call, tool):
     lambda s: views.report_cost(s, 300),
     lambda s: views.report_waste(s),
     lambda s: snapshot_dashboard(s, View()),
-    lambda s: snapshot_dashboard(s, View(mode=HELP)),
+    lambda s: snapshot_dashboard(s, View(mode=Mode.HELP)),
     lambda s: snapshot_dashboard(s, View(zoomed=True, selected="cc|aaa|burn")),
-    lambda s: snapshot_dashboard(s, View(zoomed=True, panel=TURNS, selected="cc|aaa|burn")),
+    lambda s: snapshot_dashboard(s, View(zoomed=True, panel=Panel.TURNS, selected="cc|aaa|burn")),
     lambda s: snapshot_dashboard(s, View(source="cx")),
     lambda s: snapshot_dashboard(s, View(needle="nothing matches")),
     lambda s: snapshot_dashboard(s, View(limit=4e7)),

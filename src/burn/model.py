@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
 import itertools
 import time
 from collections.abc import Iterable
@@ -14,6 +15,7 @@ __all__ = [
     "Reading",
     "Row",
     "Snapshot",
+    "Source",
     "Spend",
     "Tooling",
     "Usage",
@@ -27,8 +29,14 @@ OUTPUT_WEIGHT = 5.0
 BLOCK = 300 * 60  # Claude Code's rolling quota block, in seconds
 CACHE_TTL = 5 * 60  # short cache lifetime, in seconds
 
-CLAUDE = "cc"
-CODEX = "cx"
+
+
+class Source(enum.StrEnum):
+    """The agent a transcript came from. The value is its short display key."""
+
+    CLAUDE = "cc"
+    CODEX = "cx"
+
 
 FANOUT_TOOLS = frozenset({"Task", "Agent", "Workflow"})
 
@@ -70,7 +78,7 @@ class Call:
     """One API request from either agent."""
 
     at: float
-    source: str
+    source: Source
     session: str
     project: str
     model: str
@@ -164,7 +172,7 @@ class Snapshot:
             tools=tuple(t for t in self.tools if t.at >= cutoff),
         )
 
-    def from_agent(self, source: str | None) -> Snapshot:
+    def from_agent(self, source: Source | None) -> Snapshot:
         """Return data for ``source``, or all data when it is None."""
         if source is None:
             return self
@@ -180,7 +188,7 @@ class Snapshot:
 class Row:
     """One session summarized for the table."""
 
-    source: str
+    source: Source
     session: str
     project: str
     model: str

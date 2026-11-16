@@ -31,7 +31,7 @@ from .api import burn_documents, burn_latest
 from .app import console_monitor
 from .dashboard import snapshot_dashboard
 from .ingest import Tailer
-from .model import Snapshot
+from .model import Snapshot, Source
 from .quota import QUOTA_TIMEOUT
 from .state import SORTS, View
 from .views import (
@@ -63,6 +63,8 @@ ASCII = str.maketrans({
 def main(argv: list[str] | None = None) -> None:
     spec = _parser()
     args = spec.parse_args(argv)
+    # Parsed as text so a bad value lists the choices; held as the enum after.
+    args.source = Source(args.source) if args.source else None
     if args.follow and not args.json:
         spec.error("--follow needs --json")
     if args.json and args.view != LIVE:
@@ -159,7 +161,9 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="read local transcripts; skip the quota request",
     )
-    spec.add_argument("--source", choices=["cc", "cx"], help="show one agent only")
+    spec.add_argument(
+        "--source", choices=[s.value for s in Source], help="show one agent only"
+    )
     spec.add_argument(
         "--json", action="store_true", help="print one snapshot as JSON for other programs"
     )

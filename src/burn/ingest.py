@@ -11,13 +11,12 @@ from collections.abc import Iterable, Iterator
 
 from .format import id_short, iso_epoch
 from .model import (
-    CLAUDE,
-    CODEX,
     FANOUT_TOOLS,
     Call,
     Gauge,
     Reading,
     Snapshot,
+    Source,
     Tooling,
     Usage,
 )
@@ -35,9 +34,9 @@ CODEX_ROOT = pathlib.Path.home() / ".codex" / "sessions"
 SUBAGENTS = "*/*/subagents/**/*.jsonl"
 
 TREES = (
-    (CLAUDE_ROOT, CLAUDE, "*/*.jsonl"),
-    (CLAUDE_ROOT, CLAUDE, SUBAGENTS),
-    (CODEX_ROOT, CODEX, "*/*/*/rollout-*.jsonl"),
+    (CLAUDE_ROOT, Source.CLAUDE, "*/*.jsonl"),
+    (CLAUDE_ROOT, Source.CLAUDE, SUBAGENTS),
+    (CODEX_ROOT, Source.CODEX, "*/*/*/rollout-*.jsonl"),
 )
 
 
@@ -153,7 +152,7 @@ class Tailer:
 
     def _carry_for(self, path: pathlib.Path, source: str) -> Carry:
         if path not in self._carry:
-            seed = Carry(session=id_short(path.stem[-36:])) if source == CODEX else Carry()
+            seed = Carry(session=id_short(path.stem[-36:])) if source == Source.CODEX else Carry()
             self._carry[path] = seed
         return self._carry[path]
 
@@ -196,7 +195,7 @@ def transcript_records(path: pathlib.Path) -> Iterator[dict]:
 
 def _parse(lines: Iterable[str], source: str, carry: Carry) -> Fragment:
     """Parse one batch of appended lines."""
-    reader = _read_claude if source == CLAUDE else _read_codex
+    reader = _read_claude if source == Source.CLAUDE else _read_codex
     return reader(_decode(lines), carry)
 
 
@@ -224,7 +223,7 @@ def _read_claude(records: Iterable[dict], carry: Carry) -> Fragment:
             details = usage.get("output_tokens_details") or {}
             call = Call(
                 at=at,
-                source=CLAUDE,
+                source=Source.CLAUDE,
                 session=id_short(record.get("sessionId") or "?"),
                 project=pathlib.Path(record.get("cwd") or "?").name,
                 model=model,
@@ -340,7 +339,7 @@ def _codex_call(payload: dict, at: float, stamp: str, carry: Carry) -> tuple[str
         f"cx|{carry.session}|{stamp}|{usage.get('total_tokens')}",
         Call(
             at=at,
-            source=CODEX,
+            source=Source.CODEX,
             session=carry.session,
             project=carry.project,
             model=carry.model,
