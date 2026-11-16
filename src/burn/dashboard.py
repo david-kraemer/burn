@@ -131,7 +131,7 @@ def _quota_meter(window: Quota, now: float, unread: bool = False) -> Text:
         )
     return Text.assemble(
         (f"Claude {window.name:<5.5}", "cyan"),
-        widget_meter(window.used_percent / 100, METER_WIDTH, percent_tint(window.used_percent)),
+        widget_meter(window.used_percent / 100, METER_WIDTH),
         f" {window.used_percent:5.1f}%",
         (_reset(window.resets_at, now), "dim"),
         (f"  {window.scope}", "dim") if window.scope else "",
@@ -148,7 +148,7 @@ def _credit_meter(credits: Spend, unread: bool = False) -> Text:
     used = credits.used_percent
     return Text.assemble(
         ("Claude cred ", "cyan"),
-        widget_meter(used / 100, METER_WIDTH, percent_tint(used)),
+        widget_meter(used / 100, METER_WIDTH),
         f" {used:5.1f}%",
         (f"  ${credits.used:,.2f} of ${credits.cap:,.2f}", "dim"),
     )
@@ -194,7 +194,7 @@ def _codex_meters(snapshot: Snapshot) -> list[Text]:
     return [
         Text.assemble(
             (f"Codex {seconds_span(gauge.window_minutes * 60):>4} ", "magenta"),
-            widget_meter(gauge.used_percent / 100, METER_WIDTH, percent_tint(gauge.used_percent)),
+            widget_meter(gauge.used_percent / 100, METER_WIDTH),
             f" {gauge.used_percent:5.1f}%",
             (_reset(gauge.resets_at, snapshot.at), "dim"),
         )

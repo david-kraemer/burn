@@ -7,8 +7,10 @@ from rich.console import Console
 
 from burn import views
 from burn.dashboard import _scrollbar, snapshot_dashboard
+from burn.format import HEAT, percent_tint
 from burn.model import Gauge, Quota, Reading, Snapshot, Spend, Usage
 from burn.state import Mode, Panel, View, table_viewport
+from burn.widgets import widget_meter
 
 
 def plain(renderable, width=120, height=40):
@@ -300,3 +302,29 @@ def test_turns_spanning_days_carry_their_dates(snapshot, call):
     (monday,) = [line for line in frame.splitlines() if "monday morning" in line]
     assert saturday.startswith("Sat Nov 14 23:50")
     assert monday.startswith("Mon Nov 16 09:05")
+
+
+def test_heat_runs_cool_to_hot_with_the_old_warning_thresholds():
+    assert percent_tint(0) == HEAT[0][1]
+    assert percent_tint(-5) == HEAT[0][1]
+    assert percent_tint(100) == HEAT[-1][1]
+    assert len({color for _, color in HEAT}) == len(HEAT) >= 6
+    floors = [floor for floor, _ in HEAT]
+    assert floors == sorted(floors) and {60, 85} <= set(floors)
+
+
+def test_a_meter_colors_each_cell_by_its_own_band():
+    meter = widget_meter(0.9, 20)
+    fill = [str(span.style) for span in meter.spans if span.style != "dim"]
+    assert fill[0] == percent_tint(0) and fill[-1] == percent_tint(90)
+    # Bands appear in heat order, each once, and red covers only the cells past 85%.
+    assert fill == [percent_tint(p) for p in sorted({p for p, _ in HEAT} & set(range(0, 90)))]
+    red = next(span for span in meter.spans if str(span.style) == percent_tint(85))
+    assert red.end - red.start == 1  # cell 17 of 20 (85-90%)
+    calm = widget_meter(0.5, 20)
+    assert percent_tint(60) not in {str(span.style) for span in calm.spans}
+
+
+def test_a_meter_with_a_style_is_one_color():
+    meter = widget_meter(0.9, 20, "dim")
+    assert {str(span.style) for span in meter.spans} == {"dim"}

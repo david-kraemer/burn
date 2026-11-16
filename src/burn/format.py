@@ -15,6 +15,20 @@ SPARK = "▁▂▃▄▅▆▇█"
 SPAN_WIDTH = 6
 COUNTDOWN_WIDTH = len("in ") + SPAN_WIDTH
 
+# Heat bands, each a percentage floor and its color, cool to hot. Yellow
+# starts at 60 and red at 85, the old warning thresholds; the extra bands
+# split the calm range and the red zone.
+HEAT = (
+    (0, "#5e60ce"),  # indigo
+    (15, "#4895ef"),  # blue
+    (30, "#4cc9f0"),  # cyan
+    (45, "#52b788"),  # green
+    (60, "#ffd60a"),  # yellow
+    (72, "#ff9f1c"),  # orange
+    (85, "#e63946"),  # red
+    (95, "bold #ff006e"),  # hot pink
+)
+
 
 def number_quantity(value: float) -> str:
     """Format a token count with three significant figures."""
@@ -107,8 +121,12 @@ def id_short(identifier: str) -> str:
 
 
 def percent_tint(percent: float) -> str:
-    """Return green, yellow, or red for a percentage."""
-    return "red" if percent >= 85 else "yellow" if percent >= 60 else "green"
+    """Return the heat band color for a percentage: cool at 0, hot at 100."""
+    tint = HEAT[0][1]
+    for floor, color in HEAT:
+        if percent >= floor:
+            tint = color
+    return tint
 
 
 def series_sparkline(series: list[float], ceiling: float, floor: float = 0.0) -> str:
@@ -131,6 +149,5 @@ def series_resample(series: list[float], width: int) -> list[float]:
     # the series' final point to float drift.
     edges = [round(i * step) for i in range(width)] + [len(series)]
     return [
-        sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1)
-        for lo, hi in itertools.pairwise(edges)
+        sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1) for lo, hi in itertools.pairwise(edges)
     ]
