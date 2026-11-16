@@ -109,6 +109,9 @@ def _claude_meters(snapshot: Snapshot, view: View) -> list[Text]:
     drawn = [_quota_meter(window, snapshot.at, reading.pending) for window in reading.windows]
     if reading.spend is not None:
         drawn.append(_credit_meter(reading.spend, reading.pending))
+    if reading.pending and drawn:
+        # Say once how old the withheld values are, so a stalled poll shows.
+        drawn[0].append(f"  as of {seconds_span(snapshot.at - reading.at)} ago", style="dim")
     return drawn or [_local_meter(snapshot, view)]
 
 

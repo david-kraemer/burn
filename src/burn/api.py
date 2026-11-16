@@ -17,6 +17,16 @@ requested no more often than the shared cache allows.
 
 Fields may be added; existing ones keep their names and meaning.
 ``BURN_SCHEMA`` changes only when a field is removed or redefined.
+
+Quota freshness. ``quota_at`` is the epoch at which the ``quota`` and
+``spend`` values were fetched, or null if none ever were; ``at - quota_at``
+is their age. Values are refreshed at most every two minutes, and less
+often while requests fail (the delay doubles up to fifteen minutes).
+``quota_pending`` is true once the values are older than fifteen minutes
+(``QUOTA_STALE``): they are then still present, but only so the windows'
+names and order stay known; treat their percentages and reset times as
+unknown, and use ``quota_at`` to say how old they are. An empty ``quota``
+means no reading has ever been cached.
 """
 
 from __future__ import annotations
@@ -90,7 +100,8 @@ def burn_document(snapshot: Snapshot, view: View) -> dict:
         "source": view.source,
         "quota": [dataclasses.asdict(window) for window in reading.windows] if reading else [],
         "quota_at": reading.at if reading else None,
-        # Pending values are older than QUOTA_STALE and shown only for shape.
+        # Pending values are older than QUOTA_STALE and kept only for shape;
+        # quota_at says how old. See the module docstring.
         "quota_pending": reading.pending if reading else False,
         "spend": dataclasses.asdict(reading.spend) if reading and reading.spend else None,
         "codex": [dataclasses.asdict(gauge) for gauge in snapshot.gauges],

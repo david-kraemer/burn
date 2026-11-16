@@ -153,9 +153,10 @@ effective rate for each model.
 Codex transcript records contain token counts but no cost. `burn` therefore
 does not report a Codex dollar amount.
 
-The Claude meter uses reported quota data if available. If remote quota data is
-not available, it uses a five-hour estimate. Use `--limit` to set the
-weighted-token allowance:
+The Claude meter uses reported quota data if available. Values older than 15
+minutes are hidden but their rows are kept, and the first row says how old
+they are (`as of 14m ago`). If remote quota data is not available, it uses a
+five-hour estimate. Use `--limit` to set the weighted-token allowance:
 
 ```sh
 burn --limit 40e6
@@ -229,8 +230,8 @@ seconds. Percentages run from 0 to 100.
 | `quota[].resets_at` | float or null | Reset time. |
 | `quota[].scope` | string or null | Model the window applies to, if scoped. |
 | `quota[].active` | bool | True for the window that governs the account. |
-| `quota_at` | float or null | When the quota values were fetched. |
-| `quota_pending` | bool | True when the values are older than 15 minutes and are kept only for their shape. |
+| `quota_at` | float or null | When the quota values were fetched; `at - quota_at` is their age. |
+| `quota_pending` | bool | True when the values are older than 15 minutes and are kept only for their shape; treat them as unknown. |
 | `spend` | object or null | Extra-usage credits: `used`, `cap`, in major currency units. |
 | `codex` | list | Codex quota windows: `used_percent`, `window_minutes`, `resets_at`. |
 | `sessions` | list | One row per session and project, sorted by `--sort`, largest first. |

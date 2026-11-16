@@ -9,9 +9,9 @@ import pytest
 import burn
 from burn import Gauge, Quota, Reading, Snapshot, Source, Spend, Usage, View, ingest
 
-LEGACY_KEYS = {"at", "window_minutes", "quota", "spend", "sessions"}
+LEGACY_KEYS = {"at", "window_minutes", "quota", "quota_pending", "quota_at", "spend", "sessions"}
 QUOTA_KEYS = {"name", "group", "used_percent", "resets_at", "scope", "active"}
-ROW_KEYS = {"session", "project", "weight", "rate", "cost", "ctx"}
+ROW_KEYS = {"session", "project", "weight", "rate", "cost", "ctx", "last"}
 
 
 @pytest.fixture
@@ -58,6 +58,19 @@ def test_the_document_says_how_old_its_quota_is(reported):
     stale = dataclasses.replace(reported, reading=pending)
     assert burn.burn_document(stale, View())["quota_pending"] is True
     assert burn.burn_document(Snapshot(at=1.0), View())["quota_at"] is None
+
+
+def test_a_pending_document_keeps_its_windows_and_their_age(reported):
+    """Consumers see the windows, that their values are withheld, and how old they are."""
+    import dataclasses
+
+    stale = dataclasses.replace(
+        reported, at=990.0 + 3600, reading=dataclasses.replace(reported.reading, pending=True)
+    )
+    doc = burn.burn_document(stale, View())
+    assert doc["quota_pending"] is True
+    assert [q["name"] for q in doc["quota"]] == ["week"]
+    assert doc["at"] - doc["quota_at"] == 3600
 
 
 # ------------------------------------------------------------------ sampling

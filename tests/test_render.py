@@ -178,6 +178,19 @@ def test_pending_window_shows_no_value(busy, snapshot):
     assert "2.0%" not in frame and "$261.32" not in frame
 
 
+def test_pending_quota_says_how_old_its_values_are(busy, snapshot):
+    """A stalled poll must be visible: name the age of the withheld values once."""
+    import dataclasses
+
+    stale = dataclasses.replace(REPORTED, pending=True)
+    frame = plain(snapshot_dashboard(snapshot(at=1840.0, calls=busy.calls, reading=stale), View()))
+    assert frame.count("as of 14m ago") == 1
+    (five,) = [line for line in frame.splitlines() if "Claude 5h" in line]
+    assert "as of 14m ago" in five
+    current = plain(snapshot_dashboard(snapshot(calls=busy.calls, reading=REPORTED), View()))
+    assert "as of" not in current
+
+
 def brackets(frame):
     """Return each meter bar's line and column positions."""
     return [
