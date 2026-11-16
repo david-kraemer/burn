@@ -1,5 +1,7 @@
 """Rendering: every view must produce a frame from any snapshot, empty included."""
 
+import re
+
 import pytest
 from rich.console import Console
 
@@ -207,6 +209,11 @@ def test_pending_quota_does_not_use_local_estimate(busy, snapshot):
 # ---------------------------------------------------------------- reset times
 
 
+# A reset column: "Sat Nov 21 01:00", then "in  4d12h" or "    3m ago".
+DATED = re.compile(r"\b[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d\b")
+COUNTDOWN = re.compile(r" (in +\S+|\S+ ago)\b")
+
+
 def local(*fields):
     """Epoch of a wall-clock time in the local zone."""
     import datetime
@@ -248,7 +255,7 @@ def test_a_weekly_quota_meter_says_which_day_it_resets(busy, snapshot):
     (week,) = [line for line in frame.splitlines() if "Claude week" in line]
     assert "Mon Nov 16 10:00 " in five and "in  1h00m" in five
     assert "Thu Nov 19 09:00 " in week and "in  3d00h" in week
-    assert five.index("resets") == week.index("resets")
+    assert DATED.search(five).start() == DATED.search(week).start()
 
 
 def test_a_codex_gauge_resetting_on_another_day_carries_its_date(snapshot):
@@ -258,8 +265,12 @@ def test_a_codex_gauge_resetting_on_another_day_carries_its_date(snapshot):
 
 
 def test_scope_and_governing_trail_the_reset_columns(busy, snapshot):
-    frame = plain(snapshot_dashboard(snapshot(calls=busy.calls, reading=REPORTED), View()))
-    rows = [line for line in frame.splitlines() if line.startswith("Claude ") and "resets" in line]
-    assert len({line.index("resets") for line in rows}) == 1
-    assert len({line.index(" in ") for line in rows}) == 1
+    # Hours before the earliest reset, so countdowns take their real widths.
+    at = min(window.resets_at for window in REPORTED.windows) - 5 * 3600
+    frame = plain(snapshot_dashboard(snapshot(at=at, calls=busy.calls, reading=REPORTED), View()))
+    lines = frame.splitlines()
+    rows = [line for line in lines if line.startswith("Claude ") and DATED.search(line)]
+    assert len(rows) == len(REPORTED.windows), "every quota window draws a dated row"
+    assert len({DATED.search(line).start() for line in rows}) == 1
+    assert len({COUNTDOWN.search(line).start() for line in rows}) == 1
     assert all(line.index("Fable") > line.index(" in ") for line in rows if "Fable" in line)
