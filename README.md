@@ -59,6 +59,9 @@ Common options:
 --limit <tokens>      Set the local weighted-token allowance.
 --no-remote           Read local transcripts. Skip the quota request.
 --once                Print one live-view frame and exit.
+--plain               Print ASCII text without colour.
+--json                Print one snapshot as JSON. See "Programmatic use".
+--follow              With --json, print a document per line every --interval.
 ```
 
 For example:
@@ -68,6 +71,17 @@ burn --window 60 --source cx
 burn tools --window 1440 --top 20
 burn --once
 ```
+
+When standard output is not a terminal, every view prints plain ASCII text
+with no colour codes, no block characters, and no trailing blanks, and the
+live view prints one frame instead of taking over the screen. `--plain` asks
+for the same output on a terminal. Block characters map one for one to ASCII
+(`█` to `#`, `·` to `-`, sparkline levels to `_.:~=+*#`), so columns stay
+aligned.
+
+Quota reset times show the clock alone when the reset is later today. A
+reset on another day shows its date and the time left, for example
+`Thu Nov 19 5:59AM EST (in 3d04h)`.
 
 ## Live-view controls
 
@@ -93,6 +107,7 @@ burn --once
 | Agent | Transcript location | Usage record |
 | --- | --- | --- |
 | Claude Code | `~/.claude/projects/*/*.jsonl` | `assistant` records and `message.usage` |
+| Claude Code subagents | `~/.claude/projects/*/<session>/subagents/**/*.jsonl` | the same |
 | Codex | `~/.codex/sessions/Y/M/D/rollout-*.jsonl` | `event_msg` records and `token_count` |
 
 The program normalizes both formats into one call record. It reads new data
@@ -100,7 +115,14 @@ on each refresh and tracks the last byte read from each transcript.
 
 Claude Code can write several records for one API call. `burn` merges records
 with the same message and request identifiers so that it does not count the
-same usage more than once.
+same usage more than once. The last record carries the final usage; earlier
+ones in subagent transcripts carry a partial output count.
+
+Subagent records carry the parent's session ID, so their usage joins the
+parent session's row. The row's `CTX` and model come from the main thread.
+
+Codex can repeat a `token_count` event without new usage. `burn` counts an
+event only when the running total changes.
 
 ## Token weight
 
@@ -146,13 +168,88 @@ percentages recorded by Codex.
 
 The transcript is not a complete billing record.
 
-Claude Code can bill subagent and background work absent from its main
-transcript. `burn verify` shows the difference between observed and Claude's
-recorded totals. Sessions using `Task`, `Agent`, or `Workflow` can show a
-larger difference.
+Claude Code can bill background work absent from its transcripts. `burn
+verify` shows the difference between observed and Claude's recorded totals,
+counting subagent transcripts toward the session that started them.
 
 Codex token totals are read from its `token_count` records. The tool does not
 infer costs that Codex does not record.
+
+## Programmatic use
+
+`burn --json` prints one JSON document and exits. `burn --json --follow`
+prints one compact document per line (JSON Lines) every `--interval` seconds,
+flushing after each. It reads transcripts incrementally and exits quietly on
+Ctrl-C or when the reader closes the pipe. `--window`, `--source`, `--sort`,
+and `--no-remote` apply to both.
+
+```sh
+burn --json --window 60 | jq '.sessions[] | {session, weight}'
+burn --json --follow --interval 5 --no-remote | jq -c "{at, sessions: (.sessions | length)}"
+```
+
+Python programs can import the same data from the `burn` package. Public
+functions carry the `burn_` prefix and live at the top level; records keep
+their class names (`burn.Snapshot`, `burn.View`, …). Submodules are
+implementation detail.
+
+```python
+import asyncio
+import burn
+
+doc = asyncio.run(burn.burn_latest(window=60))           # one document
+
+async def watch():
+    async for doc in burn.burn_documents(window=60, interval=5):   # until you stop
+        ...
+```
+
+| Function | Returns |
+| --- | --- |
+| `async burn_latest(window=300, *, source=None, sort="weight", remote=True)` | One document. Waits up to four seconds for quota data. |
+| `async burn_documents(window=300, *, interval=2.0, source=None, sort="weight", remote=True)` | An async generator of documents. Only the first waits for quota data. |
+| `burn_document(snapshot, view)` | The document for a `Snapshot` and `View`. Pure. |
+
+### Document schema
+
+Fields may be added. Existing fields keep their names and meanings. `schema`
+changes only when a field is removed or redefined. Times are Unix epoch
+seconds. Percentages run from 0 to 100.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `schema` | int | Document version, currently 1. |
+| `at` | float | Sample time. |
+| `window_minutes` | int | History window of `sessions`. |
+| `source` | string or null | Agent filter: `"cc"`, `"cx"`, or null for both. |
+| `quota` | list | Claude quota windows, shortest first. Empty without remote data. |
+| `quota[].name` | string | `"5h"`, `"week"`, or the reported kind. |
+| `quota[].group` | string | `"session"`, `"weekly"`, and so on. |
+| `quota[].used_percent` | float | Share of the window used. |
+| `quota[].resets_at` | float or null | Reset time. |
+| `quota[].scope` | string or null | Model the window applies to, if scoped. |
+| `quota[].active` | bool | True for the window that governs the account. |
+| `quota_at` | float or null | When the quota values were fetched. |
+| `quota_pending` | bool | True when the values are older than 15 minutes and are kept only for their shape. |
+| `spend` | object or null | Extra-usage credits: `used`, `cap`, in major currency units. |
+| `codex` | list | Codex quota windows: `used_percent`, `window_minutes`, `resets_at`. |
+| `sessions` | list | One row per session and project, sorted by `--sort`, largest first. |
+| `sessions[].source` | string | `"cc"` or `"cx"`. |
+| `sessions[].session` | string | Session key: the first 12 characters of the session ID. |
+| `sessions[].project` | string | Last component of the working directory. |
+| `sessions[].model` | string | Model of the main thread's latest request. |
+| `sessions[].ctx` | int | Main thread's current context, in tokens. |
+| `sessions[].cache` | float | Percent of cached input read rather than written. |
+| `sessions[].think` | int | Reasoning tokens. |
+| `sessions[].weight` | float | Weighted tokens in the window, subagents included. |
+| `sessions[].rate` | float | Weighted tokens per minute over the last five minutes. |
+| `sessions[].cost` | float | Estimated dollars. Zero for Codex. |
+| `sessions[].calls` | int | Requests in the window. |
+| `sessions[].first`, `sessions[].last` | float | Times of the first and last request in the window. |
+| `sessions[].fanout` | bool | The session started subagents. |
+
+A session that ran in several directories has one row per project. Sum
+rows by `session` to total a session.
 
 ## Requirements
 

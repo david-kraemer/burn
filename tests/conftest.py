@@ -56,9 +56,9 @@ def free_rates(monkeypatch, tmp_path):
 def offline(monkeypatch, tmp_path):
     """Prevent tests from accessing the usage endpoint or quota cache.
 
-    Stub ``reported``, not ``token``. Token tests stub the subprocess.
+    Stub ``_reported``, not ``_token``. Token tests stub the subprocess.
     """
     from burn import quota
 
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response())
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response())
     monkeypatch.setattr(quota, "CACHE", tmp_path / "quota.json")

@@ -1,19 +1,19 @@
 """The keypress reducer: pure, so it can be exercised a keystroke at a time."""
 
-from burn.analysis import tabulate
-from burn.keys import apply
+from burn.analysis import snapshot_table
+from burn.keys import key_apply
 from burn.model import Usage
-from burn.state import FILTER, HELP, MAX_WINDOW, MIN_WINDOW, TABLE, TOOLS, TURNS, View, cursor
+from burn.state import FILTER, HELP, MAX_WINDOW, MIN_WINDOW, TABLE, TOOLS, TURNS, View, view_cursor
 
 
 def table(snapshot, call, sessions=("aaa", "bbb", "ccc")):
     calls = [call(session=s, usage=Usage(input=n)) for n, s in enumerate(sessions, 1)]
-    return sorted(tabulate(snapshot(calls=calls)), key=lambda r: -r.weight)
+    return sorted(snapshot_table(snapshot(calls=calls)), key=lambda r: -r.weight)
 
 
 def press(view, table, *keys):
     for key in keys:
-        view = apply(key, view, table)
+        view = key_apply(key, view, table)
         if view is None:
             return None
     return view
@@ -21,20 +21,20 @@ def press(view, table, *keys):
 
 def test_q_and_ctrl_c_quit(snapshot, call):
     rows = table(snapshot, call)
-    assert apply("q", View(), rows) is None
-    assert apply("\x03", View(), rows) is None
+    assert key_apply("q", View(), rows) is None
+    assert key_apply("\x03", View(), rows) is None
 
 
 def test_an_unbound_key_changes_nothing(snapshot, call):
     view = View()
-    assert apply("z", view, table(snapshot, call)) == view
+    assert key_apply("z", view, table(snapshot, call)) == view
 
 
 def test_moving_down_selects_the_next_row(snapshot, call):
     rows = table(snapshot, call)
     moved = press(View(), rows, "j")
     assert moved.selected == rows[1].key
-    assert cursor(moved, rows) == 1
+    assert view_cursor(moved, rows) == 1
 
 
 def test_the_cursor_stops_at_both_ends(snapshot, call):
@@ -57,7 +57,7 @@ def test_the_selection_follows_its_session_when_the_sort_flips(snapshot, call):
     chosen = view.selected
     flipped = sorted(rows, key=lambda r: r.weight)
     assert press(view, rows, "r").selected == chosen
-    assert cursor(view, flipped) == len(rows) - 2
+    assert view_cursor(view, flipped) == len(rows) - 2
 
 
 def test_moving_in_an_empty_table_selects_nothing():
@@ -80,12 +80,12 @@ def test_a_session_split_across_projects_does_not_trap_the_cursor(snapshot, call
         call(session="dup", project="projb", usage=Usage(input=10)),
         call(session="solo", project="projc", usage=Usage(input=5)),
     ]
-    rows = sorted(tabulate(snapshot(calls=calls)), key=lambda r: -r.weight)
+    rows = sorted(snapshot_table(snapshot(calls=calls)), key=lambda r: -r.weight)
     assert len({r.session for r in rows}) == 2  # "dup" appears twice
     view = View()
     for _ in range(len(rows) - 1):
-        view = apply("j", view, rows)
-    assert cursor(view, rows) == len(rows) - 1
+        view = key_apply("j", view, rows)
+    assert view_cursor(view, rows) == len(rows) - 1
 
 
 def test_t_swaps_the_zoom_pane(snapshot, call):

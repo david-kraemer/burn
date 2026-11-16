@@ -7,8 +7,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from itertools import pairwise
 
-__all__ = ["Call", "Gauge", "Quota", "Reading", "Row", "Snapshot", "Spend", "Tooling", "Usage"]
-
 # Weights are relative to one input token; raw sums overstate cost.
 CACHE_WRITE_WEIGHT = 1.25
 CACHE_READ_WEIGHT = 0.1
@@ -70,6 +68,7 @@ class Call:
     cache_1h: int = 0
     prompt: str = ""
     fanout: bool = False
+    sidechain: bool = False  # Made by a subagent, not the session's main thread.
 
     @property
     def prefix(self) -> int:
@@ -190,12 +189,12 @@ class Row:
         return f"{self.source}|{self.session}|{self.project}"
 
 
-def compactions(calls: Iterable[Call]) -> int:
+def calls_compactions(calls: Iterable[Call]) -> int:
     """Count context compactions."""
     return sum(1 for a, b in pairwise(calls) if b.prefix < a.prefix * 0.7)
 
 
-def threads(calls: Iterable[Call]) -> list[list[Call]]:
+def calls_threads(calls: Iterable[Call]) -> list[list[Call]]:
     """Split interleaved calls into separately growing conversations."""
     open_: list[list[Call]] = []
     for call in calls:

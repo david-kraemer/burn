@@ -11,28 +11,28 @@ from rich.text import Text
 Column = tuple[str, int]
 
 
-def meter(fraction: float, width: int, style: str = "cyan") -> Text:
+def widget_meter(fraction: float, width: int, style: str = "cyan") -> Text:
     """Render a bracket meter."""
-    filled = clamp(fraction * width, width)
+    filled = _clamp(fraction * width, width)
     return Text.assemble(
         ("[", "dim"), ("|" * filled, style), (" " * (width - filled), ""), ("]", "dim")
     )
 
 
-def bar(percent: float, width: int = 8) -> str:
+def widget_bar(percent: float, width: int = 8) -> str:
     """Render a proportion bar for a table cell."""
-    filled = clamp(percent / 100 * width, width)
+    filled = _clamp(percent / 100 * width, width)
     return "█" * filled + "░" * (width - filled)
 
 
-def clamp(value: float, width: int) -> int:
+def _clamp(value: float, width: int) -> int:
     """Round a fill amount into [0, width]; non-finite input draws empty (round() would raise)."""
     if not math.isfinite(value):
         return 0
     return max(0, min(width, round(value)))
 
 
-def grid(rows: Iterable[tuple[str, object]]) -> Table:
+def widget_grid(rows: Iterable[tuple[str, object]]) -> Table:
     """Render a two-column label and value block."""
     layout = Table.grid(padding=(0, 2))
     layout.add_column(style="dim")
@@ -42,7 +42,7 @@ def grid(rows: Iterable[tuple[str, object]]) -> Table:
     return layout
 
 
-def columns(left: Iterable[Column], right: Iterable[Column] = ()) -> Table:
+def widget_columns(left: Iterable[Column], right: Iterable[Column] = ()) -> Table:
     """Create a borderless table with left and right columns."""
     table = Table(box=None, pad_edge=False, header_style="bold", title_justify="left")
     for name, width in left:

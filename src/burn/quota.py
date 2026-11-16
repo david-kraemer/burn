@@ -21,14 +21,14 @@ import urllib.request
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from .format import moment
+from .format import iso_epoch
 from .model import Quota, Reading, Spend
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 OAUTH_BETA = "oauth-2025-04-20"
 
-TIMEOUT = 4.0  # seconds; the live dashboard must not wait for the network
+QUOTA_TIMEOUT = 4.0  # seconds; the live dashboard must not wait for the network
 
 # Each ``burn --once`` starts a new process. An in-process interval would not
 # limit requests across processes. The cache shares the interval and provides
@@ -37,9 +37,9 @@ CACHE = Path.home() / ".cache" / "burn" / "quota.json"
 
 # Request interval. The cache carries it across processes. The lease stops
 # instances on the same interval from requesting together.
-TTL = 120.0
+QUOTA_TTL = 120.0
 # Data older than this interval keeps its window shape. It does not keep its values.
-STALE = 900.0
+QUOTA_STALE = 900.0
 # Maximum delay after a rate-limit response.
 MAX_BACKOFF = 900.0
 
@@ -49,51 +49,51 @@ ORDER = ("session", "weekly", "monthly")
 NAMES = {"session": "5h", "weekly_all": "week", "weekly_scoped": "week"}
 
 
-def reading() -> Reading | None:
+def quota_reading() -> Reading | None:
     """Return cached or reported quota data.
 
     Return the last window shape if a request fails. Mark its values as
     pending if the data is stale.
     """
-    stored, blocked = cached()
+    stored, blocked = _cached()
     now = time.time()
     # Draw current data and blocked data as they stand. TTL is shorter than
     # STALE. Current data is never marked pending.
-    if not due(stored, blocked, now) or not leased():
-        return usable(stored)
+    if not _due(stored, blocked, now) or not _leased():
+        return _usable(stored)
     try:
-        answer = reported()
+        answer = _reported()
     finally:
-        release()
-    return recorded(answer, stored, now)
+        _release()
+    return _recorded(answer, stored, now)
 
 
-def shape() -> Reading | None:
+def quota_shape() -> Reading | None:
     """Return the cached window shape without a network request."""
-    return usable(cached()[0])
+    return _usable(_cached()[0])
 
 
-def due(stored: Reading | None, blocked: float, now: float) -> bool:
+def _due(stored: Reading | None, blocked: float, now: float) -> bool:
     """Return true if the data expired and the rate-limit delay ended."""
-    return now >= blocked and (stored is None or now - stored.at >= TTL)
+    return now >= blocked and (stored is None or now - stored.at >= QUOTA_TTL)
 
 
-def usable(stored: Reading | None) -> Reading | None:
+def _usable(stored: Reading | None) -> Reading | None:
     """Return current values, or the window shape if values are stale."""
     if stored is None:
         return None
-    return stored if time.time() - stored.at < STALE else replace(stored, pending=True)
+    return stored if time.time() - stored.at < QUOTA_STALE else replace(stored, pending=True)
 
 
-def recorded(answer: Response, stored: Reading | None, now: float) -> Reading | None:
+def _recorded(answer: Response, stored: Reading | None, now: float) -> Reading | None:
     """Save one response and return the data to draw."""
     if answer.retry_after:
-        save(stored, retry_at=now + answer.retry_after)
-        return usable(stored)
+        _save(stored, retry_at=now + answer.retry_after)
+        return _usable(stored)
     if answer.payload is None:
-        return usable(stored)
-    taken = Reading(at=now, windows=windows(answer.payload), spend=spend(answer.payload))
-    save(taken)
+        return _usable(stored)
+    taken = Reading(at=now, windows=_windows(answer.payload), spend=_spend(answer.payload))
+    _save(taken)
     return taken
 
 
@@ -108,14 +108,14 @@ class Response:
     retry_after: float = 0.0
 
 
-def reported() -> Response:
+def _reported() -> Response:
     """Request quota data once. Return an empty response on failure.
 
     The keychain read and the request share one deadline. Quitting cannot
     cancel this work. The terminal waits for TIMEOUT, not for both timeouts.
     """
-    deadline = time.monotonic() + TIMEOUT
-    if (bearer := token()) is None:
+    deadline = time.monotonic() + QUOTA_TIMEOUT
+    if (bearer := _token()) is None:
         return Response()
     request = urllib.request.Request(
         USAGE_URL,
@@ -124,23 +124,23 @@ def reported() -> Response:
     if (left := deadline - time.monotonic()) <= 0.0:
         return Response()  # The keychain used the whole deadline.
     try:
-        with urllib.request.urlopen(request, timeout=left, context=trust()) as response:
+        with urllib.request.urlopen(request, timeout=left, context=_trust()) as response:
             # The endpoint must report an object. Any other JSON value fails.
-            return Response(payload=answered(json.load(response)))
+            return Response(payload=_answered(json.load(response)))
     except urllib.error.HTTPError as refused:
         # Several one-shot runs can exceed the endpoint limit. Respect the
         # requested wait time.
-        return Response(retry_after=patience(refused))
+        return Response(retry_after=_patience(refused))
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         return Response()
 
 
-def answered(payload: object) -> dict | None:
+def _answered(payload: object) -> dict | None:
     """Return the reported object. Return None for any other JSON value."""
     return payload if isinstance(payload, dict) else None
 
 
-def patience(refused: urllib.error.HTTPError) -> float:
+def _patience(refused: urllib.error.HTTPError) -> float:
     """Return the requested wait time within the allowed range."""
     if refused.code not in (429, 503):
         return 0.0
@@ -148,17 +148,17 @@ def patience(refused: urllib.error.HTTPError) -> float:
         asked = float((refused.headers or {}).get("Retry-After") or 0.0)
     except (TypeError, ValueError):
         asked = 0.0
-    return min(max(asked, TTL), MAX_BACKOFF)
+    return min(max(asked, QUOTA_TTL), MAX_BACKOFF)
 
 
-def token() -> str | None:
+def _token() -> str | None:
     """Return the current OAuth token. Return None if it is unavailable or expired."""
     try:
         found = subprocess.run(
             ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
             capture_output=True,
             text=True,
-            timeout=TIMEOUT,
+            timeout=QUOTA_TIMEOUT,
             check=True,
         )
     except (OSError, subprocess.SubprocessError):
@@ -174,7 +174,7 @@ def token() -> str | None:
     return credentials.get("accessToken")
 
 
-def trust() -> ssl.SSLContext | None:
+def _trust() -> ssl.SSLContext | None:
     """Return a TLS context that verifies certificates.
 
     Use certifi if it is available. Otherwise, use the system trust store.
@@ -189,14 +189,14 @@ def trust() -> ssl.SSLContext | None:
 # ------------------------------------------------------------ reported data
 
 
-def windows(payload: dict) -> tuple[Quota, ...]:
+def _windows(payload: dict) -> tuple[Quota, ...]:
     """Convert reported limits to windows. Sort them by duration."""
-    found = [quota(entry) for entry in payload.get("limits", ()) if isinstance(entry, dict)]
+    found = [_quota(entry) for entry in payload.get("limits", ()) if isinstance(entry, dict)]
     rank = {name: index for index, name in enumerate(ORDER)}
     return tuple(sorted(found, key=lambda q: (rank.get(q.group, len(ORDER)), q.name)))
 
 
-def quota(entry: dict) -> Quota:
+def _quota(entry: dict) -> Quota:
     """Convert one reported limit to a quota window."""
     kind = str(entry.get("kind") or "?")
     model = ((entry.get("scope") or {}).get("model") or {}).get("display_name")
@@ -204,24 +204,24 @@ def quota(entry: dict) -> Quota:
         name=NAMES.get(kind, kind),
         group=str(entry.get("group") or kind.split("_")[0]),
         used_percent=float(entry.get("percent") or 0.0),
-        resets_at=moment(entry.get("resets_at")),
+        resets_at=iso_epoch(entry.get("resets_at")),
         scope=model,
         active=bool(entry.get("is_active")),
     )
 
 
-def spend(payload: dict) -> Spend | None:
+def _spend(payload: dict) -> Spend | None:
     """Return extra-usage credits if they are enabled and valid."""
     block = payload.get("spend")
     if not isinstance(block, dict) or not block.get("enabled"):
         return None
     try:
-        return Spend(used=money(block["used"]), cap=money(block["limit"]))
+        return Spend(used=_money(block["used"]), cap=_money(block["limit"]))
     except (KeyError, TypeError, ValueError):
         return None
 
 
-def money(amount: dict) -> float:
+def _money(amount: dict) -> float:
     """Convert a minor currency value to a major currency value."""
     return amount["amount_minor"] / 10 ** amount.get("exponent", 2)
 
@@ -229,7 +229,7 @@ def money(amount: dict) -> float:
 # --------------------------------------------------------------------- cache
 
 
-def cached() -> tuple[Reading | None, float]:
+def _cached() -> tuple[Reading | None, float]:
     """Return the last saved reading and the next request time."""
     try:
         stored = json.loads(CACHE.read_text())
@@ -250,7 +250,7 @@ def cached() -> tuple[Reading | None, float]:
         return None, blocked
 
 
-def leased() -> bool:
+def _leased() -> bool:
     """Claim the right to make the next request.
 
     Instances started together can read the cache at the same moment. They
@@ -261,7 +261,7 @@ def leased() -> bool:
     lease = CACHE.with_suffix(".lease")
     try:
         lease.parent.mkdir(parents=True, exist_ok=True)
-        if time.time() - lease.stat().st_mtime < TIMEOUT * 2:
+        if time.time() - lease.stat().st_mtime < QUOTA_TIMEOUT * 2:
             return False  # Another instance is part-way through a request.
         lease.unlink(missing_ok=True)  # A process died while holding the claim.
     except OSError:
@@ -275,24 +275,24 @@ def leased() -> bool:
     return True
 
 
-def release() -> None:
+def _release() -> None:
     """Remove the request claim."""
     with contextlib.suppress(OSError):
         CACHE.with_suffix(".lease").unlink(missing_ok=True)
 
 
-def save(taken: Reading | None, retry_at: float = 0.0) -> None:
+def _save(taken: Reading | None, retry_at: float = 0.0) -> None:
     """Save a reading with a temporary file."""
     try:
         CACHE.parent.mkdir(parents=True, exist_ok=True)
         scratch = CACHE.with_suffix(f".{os.getpid()}.tmp")
-        scratch.write_text(json.dumps(record(taken, retry_at)))
+        scratch.write_text(json.dumps(_record(taken, retry_at)))
         scratch.replace(CACHE)
     except OSError:
         pass  # The cache is optional.
 
 
-def record(taken: Reading | None, retry_at: float = 0.0) -> dict:
+def _record(taken: Reading | None, retry_at: float = 0.0) -> dict:
     """Convert a reading to JSON-compatible values."""
     if taken is None:
         return {"at": None, "windows": [], "spend": None, "retry_at": retry_at}

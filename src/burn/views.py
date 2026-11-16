@@ -9,18 +9,26 @@ from rich.console import Group, RenderableType
 from rich.text import Text
 
 from . import analysis
-from .format import label, quantity, resample, span, sparkline, tint, trim
-from .model import CACHE_TTL, Call, Snapshot, Usage, compactions
-from .widgets import bar, columns, grid
+from .format import (
+    model_label,
+    number_quantity,
+    percent_tint,
+    seconds_span,
+    series_resample,
+    series_sparkline,
+    text_trim,
+)
+from .model import CACHE_TTL, Call, Snapshot, Usage, calls_compactions
+from .widgets import widget_bar, widget_columns, widget_grid
 
 
-def tools(snapshot: Snapshot, top: int = 15) -> RenderableType:
+def report_tools(snapshot: Snapshot, top: int = 15) -> RenderableType:
     """Show context growth by tool."""
-    blamed = analysis.attribution(snapshot.calls, snapshot.tools)
+    blamed = analysis.calls_attribution(snapshot.calls, snapshot.tools)
     if not blamed:
         return Text("No attributable context growth in this window.", style="dim")
 
-    table = columns(
+    table = widget_columns(
         [("TOOL", 20)],
         [("CALLS", 5), ("ADDED", 7), ("PER CALL", 8), ("CARRIED", 8), ("COST", 7)],
     )
@@ -30,19 +38,19 @@ def tools(snapshot: Snapshot, top: int = 15) -> RenderableType:
     for blame in blamed[:top]:
         share = blame.carried / max(grand, 1)
         table.add_row(
-            trim(blame.name, 20),
+            text_trim(blame.name, 20),
             f"{blame.calls:,}",
-            quantity(blame.added),
-            quantity(blame.added / max(blame.calls, 1)),
-            Text(quantity(blame.carried), style="bold"),
+            number_quantity(blame.added),
+            number_quantity(blame.added / max(blame.calls, 1)),
+            Text(number_quantity(blame.carried), style="bold"),
             f"${blame.cost:.2f}" if blame.cost else "·",
-            Text(bar(100 * share, 10), style=tint(100 * share * 2)),
+            Text(widget_bar(100 * share, 10), style=percent_tint(100 * share * 2)),
         )
     added = sum(b.added for b in blamed)
     return Group(
         Text.assemble(
             ("Context burn by tool", "bold"),
-            f"   {quantity(added)} added → {quantity(grand)} weighted with re-reads",
+            f"   {number_quantity(added)} added → {number_quantity(grand)} weighted with re-reads",
         ),
         Text(""),
         table,
@@ -55,7 +63,7 @@ def tools(snapshot: Snapshot, top: int = 15) -> RenderableType:
     )
 
 
-def turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
+def report_turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
     """Show the most expensive prompts."""
     grouped: dict[tuple[str, str], list[Call]] = defaultdict(list)
     for call in snapshot.calls:
@@ -64,28 +72,28 @@ def turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
     if not grouped:
         return Text("No prompts captured in this window.", style="dim")
 
-    table = columns(
+    table = widget_columns(
         [("WHEN", 5), ("SESSION", 12)], [("CALLS", 5), ("WEIGHT", 7), ("COST", 6)]
     )
     table.add_column("PROMPT", width=38, no_wrap=True)
 
     # "Most expensive" is dollars, not tokens: a heavily-used cheap model
     # can outweigh a pricier one in tokens while costing less.
-    ranked = sorted(grouped.items(), key=lambda kv: -sum(analysis.dollars(c) for c in kv[1]))
+    ranked = sorted(grouped.items(), key=lambda kv: -sum(analysis.call_dollars(c) for c in kv[1]))
     for (session, prompt), items in ranked[:top]:
-        cost = sum(analysis.dollars(c) for c in items)
+        cost = sum(analysis.call_dollars(c) for c in items)
         table.add_row(
             f"{datetime.fromtimestamp(items[0].at, UTC).astimezone():%H:%M}",
             session,
             str(len(items)),
-            Text(quantity(sum(c.weight for c in items)), style="bold"),
+            Text(number_quantity(sum(c.weight for c in items)), style="bold"),
             f"${cost:.2f}" if cost else "·",
-            trim(" ".join(prompt.split()), 38),
+            text_trim(" ".join(prompt.split()), 38),
         )
     return Group(Text("Most expensive turns", style="bold"), Text(""), table)
 
 
-def session(snapshot: Snapshot, target: str | None) -> RenderableType:
+def report_session(snapshot: Snapshot, target: str | None) -> RenderableType:
     """Show context, cache use, and tools for one session."""
     if not target:
         return Text("Usage: burn session <session-id-prefix>", style="dim")
@@ -95,62 +103,66 @@ def session(snapshot: Snapshot, target: str | None) -> RenderableType:
 
     total = sum((c.usage for c in items), Usage())
     hit = 100 * total.cache_read / max(total.cache_read + total.cache_write, 1)
-    money = sum(analysis.dollars(c) for c in items)
-    peak = max(c.prefix for c in items)
+    money = sum(analysis.call_dollars(c) for c in items)
+    # Context belongs to the main thread; subagent requests have their own.
+    own = [c for c in items if not c.sidechain] or items
+    peak = max(c.prefix for c in own)
     models: dict[str, float] = defaultdict(float)
     for call in items:
-        models[label(call.model)] += call.weight
+        models[model_label(call.model)] += call.weight
 
     facts = [
         ("session", f"{items[0].session}  ·  {items[0].project}  ·  {items[0].source}"),
-        ("span", f"{span(items[-1].at - items[0].at)} over {len(items)} calls"),
-        ("weighted", f"{quantity(total.weight)}  (~${money:.2f})"),
-        ("context", f"{quantity(items[-1].prefix)} now, peak {quantity(peak)}"),
-        ("cache", f"{hit:.0f}% hits, {quantity(total.cache_write)} re-created"),
-        ("thinking", quantity(sum(c.thinking for c in items))),
-        ("models", ", ".join(f"{m} {quantity(w)}" for m, w in
+        ("span", f"{seconds_span(items[-1].at - items[0].at)} over {len(items)} calls"),
+        ("weighted", f"{number_quantity(total.weight)}  (~${money:.2f})"),
+        ("context", f"{number_quantity(own[-1].prefix)} now, peak {number_quantity(peak)}"),
+        ("cache", f"{hit:.0f}% hits, {number_quantity(total.cache_write)} re-created"),
+        ("thinking", number_quantity(sum(c.thinking for c in items))),
+        ("models", ", ".join(f"{m} {number_quantity(w)}" for m, w in
                              sorted(models.items(), key=lambda kv: -kv[1]))),
     ]
-    if collapses := compactions(items):
+    if collapses := calls_compactions(own):
         facts.append(("compactions", f"{collapses} (context discarded and rebuilt)"))
     if any(c.fanout for c in items):
         facts.append(
-            ("fan-out", Text("yes — subagent usage is billed but unrecorded", "yellow"))
+            ("fan-out", Text("yes — subagent transcripts are counted in this session", "yellow"))
         )
 
-    curve = resample([float(c.prefix) for c in items], 56)
+    curve = series_resample([float(c.prefix) for c in own], 56)
     low, high = min(curve), max(curve)
     return Group(
         Text("Session detail", style="bold"),
         Text(""),
-        grid(facts),
+        widget_grid(facts),
         Text(""),
         Text.assemble(
             "context  ",
-            (sparkline(curve, high, low * 0.98), "cyan"),
-            f"  {quantity(low)} → {quantity(high)}",
+            (series_sparkline(curve, high, low * 0.98), "cyan"),
+            f"  {number_quantity(low)} → {number_quantity(high)}",
         ),
         Text(""),
-        tools(Snapshot(snapshot.at, tuple(items), snapshot.tools), 10),
+        report_tools(Snapshot(snapshot.at, tuple(items), snapshot.tools), 10),
     )
 
 
-def cost(snapshot: Snapshot, window: int) -> RenderableType:
+def report_cost(snapshot: Snapshot, window: int) -> RenderableType:
     """Show estimated spend by model and project."""
-    table = columns([("MODEL", 26)], [("$/WEIGHTED Mtok", 16), ("SAMPLES", 8)])
-    for model, (rate, samples) in sorted(analysis.rates().items()):
-        table.add_row(label(model), f"{rate:.2f}", str(samples))
+    table = widget_columns([("MODEL", 26)], [("$/WEIGHTED Mtok", 16), ("SAMPLES", 8)])
+    for model, (rate, samples) in sorted(analysis.rates_solved().items()):
+        table.add_row(model_label(model), f"{rate:.2f}", str(samples))
 
     spent: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
     for call in snapshot.calls:
         entry = spent[(call.source, call.project)]
         entry[0] += call.weight
-        entry[1] += analysis.dollars(call)
+        entry[1] += analysis.call_dollars(call)
 
-    spend = columns([("PROJECT", 24)], [("WEIGHT", 8), ("COST", 8)])
+    spend = widget_columns([("PROJECT", 24)], [("WEIGHT", 8), ("COST", 8)])
     for (source, project), (weight, money) in sorted(spent.items(), key=lambda kv: -kv[1][1])[:15]:
         spend.add_row(
-            f"{source}  {trim(project, 20)}", quantity(weight), f"${money:.2f}" if money else "·"
+            f"{source}  {text_trim(project, 20)}",
+            number_quantity(weight),
+            f"${money:.2f}" if money else "·",
         )
 
     return Group(
@@ -164,30 +176,32 @@ def cost(snapshot: Snapshot, window: int) -> RenderableType:
         Text(""),
         table,
         Text(""),
-        Text(f"Spend over the last {span(window * 60)}", style="bold"),
+        Text(f"Spend over the last {seconds_span(window * 60)}", style="bold"),
         Text(""),
         spend,
     )
 
 
-def waste(snapshot: Snapshot) -> RenderableType:
+def report_waste(snapshot: Snapshot) -> RenderableType:
     """Show cache tokens recreated after idle periods."""
-    summary = analysis.waste(snapshot.calls, CACHE_TTL)
+    summary = analysis.calls_waste(snapshot.calls, CACHE_TTL)
     if not summary.total:
         return Text("No cache re-creation in this window.", style="dim")
 
-    facts = grid([
+    facts = widget_grid([
         ("re-created after idle",
-         f"{quantity(summary.idle_tokens)} over {summary.idle_events} resumes"),
-        ("re-created in flow", f"{quantity(summary.churn_tokens)} (new turns, unavoidable)"),
-        ("idle premium", f"{quantity(summary.premium)} weighted tokens, "
-                         f"~${summary.premium * analysis.blended_rate():.2f}"),
+         f"{number_quantity(summary.idle_tokens)} over {summary.idle_events} resumes"),
+        ("re-created in flow", f"{number_quantity(summary.churn_tokens)} (new turns, unavoidable)"),
+        ("idle premium", f"{number_quantity(summary.premium)} weighted tokens, "
+                         f"~${summary.premium * analysis.rates_blended():.2f}"),
         ("", Text(f"{100 * summary.idle_tokens / summary.total:.0f}% of all cache creation "
-                  f"followed a gap longer than {span(CACHE_TTL)}", style="dim")),
+                  f"followed a gap longer than {seconds_span(CACHE_TTL)}", style="dim")),
     ])
 
-    tiers = columns([("SESSION", 12)], [("5m TIER", 9), ("1h TIER", 9), ("IDLE RESUMES", 13)])
-    grouped = analysis.sessions(snapshot.calls)
+    tiers = widget_columns(
+        [("SESSION", 12)], [("5m TIER", 9), ("1h TIER", 9), ("IDLE RESUMES", 13)]
+    )
+    grouped = analysis.calls_sessions(snapshot.calls)
     ranked = sorted(
         ((name, items) for name, items in grouped.items()
          if any(c.usage.cache_write for c in items)),
@@ -196,9 +210,9 @@ def waste(snapshot: Snapshot) -> RenderableType:
     for name, items in ranked[:10]:
         tiers.add_row(
             name,
-            quantity(sum(c.cache_5m for c in items)),
-            quantity(sum(c.cache_1h for c in items)),
-            str(analysis.resumes(items, CACHE_TTL)),
+            number_quantity(sum(c.cache_5m for c in items)),
+            number_quantity(sum(c.cache_1h for c in items)),
+            str(analysis.calls_resumes(items, CACHE_TTL)),
         )
 
     return Group(
@@ -216,13 +230,13 @@ def waste(snapshot: Snapshot) -> RenderableType:
     )
 
 
-def audit(threshold: float = 15.0) -> RenderableType:
+def report_audit(threshold: float = 15.0) -> RenderableType:
     """Compare observed tokens with Claude's billed totals."""
-    found = analysis.audit()
+    found = analysis.transcripts_audit()
     if not found:
         return Text("No closed sessions with cost-state records yet.", style="dim")
 
-    table = columns([("SESSION", 12)], [("OBSERVED", 9), ("BILLED", 9), ("UNSEEN", 7)])
+    table = widget_columns([("SESSION", 12)], [("OBSERVED", 9), ("BILLED", 9), ("UNSEEN", 7)])
     table.add_column("LIKELY CAUSE", width=24, no_wrap=True)
     # unseen > 0: burn saw fewer tokens than billed. < 0: burn overcounts.
     for entry in sorted(found, key=lambda r: -abs(r.unseen)):
@@ -235,9 +249,9 @@ def audit(threshold: float = 15.0) -> RenderableType:
         )
         table.add_row(
             entry.session,
-            quantity(entry.observed),
-            quantity(entry.billed),
-            Text(f"{entry.unseen:.0f}%", style=tint(abs(entry.unseen))),
+            number_quantity(entry.observed),
+            number_quantity(entry.billed),
+            Text(f"{entry.unseen:.0f}%", style=percent_tint(abs(entry.unseen))),
             cause,
         )
 

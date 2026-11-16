@@ -9,7 +9,7 @@ from itertools import pairwise
 SPARK = "▁▂▃▄▅▆▇█"
 
 
-def quantity(value: float) -> str:
+def number_quantity(value: float) -> str:
     """Format a token count with three significant figures."""
     tiers = ((1e9, "B"), (1e6, "M"), (1e3, "k"))
     for index, (limit, suffix) in enumerate(tiers):
@@ -23,7 +23,7 @@ def quantity(value: float) -> str:
     return f"{value:.0f}"
 
 
-def span(seconds: float) -> str:
+def seconds_span(seconds: float) -> str:
     """Format a duration as days, hours, minutes, or seconds."""
     seconds = max(seconds, 0)
     minutes = int(seconds // 60)
@@ -36,12 +36,32 @@ def span(seconds: float) -> str:
     return f"{mins}m" if minutes else f"{int(seconds)}s"
 
 
-def clock(epoch: float | None) -> str:
-    """Format a Unix timestamp in local time."""
-    return f"{datetime.fromtimestamp(epoch, UTC).astimezone():%H:%M}" if epoch is not None else "?"
+def _clock(epoch: float | None) -> str:
+    """Format a Unix timestamp as a local time carrying its meridiem and zone."""
+    if epoch is None:
+        return "?"
+    local = datetime.fromtimestamp(epoch, UTC).astimezone()
+    # %I is zero-padded and has no portable unpadded form, and 01-12 never
+    # strips away to nothing.
+    return f"{local:%I:%M%p %Z}".lstrip("0")
 
 
-def moment(text: str | None) -> float | None:
+def epoch_deadline(epoch: float | None, now: float) -> str:
+    """Format a reset time: the clock alone today, its date and the time left otherwise.
+
+    A weekly window's reset is days away; a bare clock reading cannot say
+    which day it means.
+    """
+    if epoch is None:
+        return "?"
+    local = datetime.fromtimestamp(epoch, UTC).astimezone()
+    if local.date() == datetime.fromtimestamp(now, UTC).astimezone().date():
+        return _clock(epoch)
+    dated = f"{local:%a %b} {local.day} {_clock(epoch)}"
+    return f"{dated} (in {seconds_span(epoch - now)})" if epoch > now else dated
+
+
+def iso_epoch(text: str | None) -> float | None:
     """Parse an ISO 8601 timestamp, or return None."""
     if not text:
         return None
@@ -51,14 +71,14 @@ def moment(text: str | None) -> float | None:
         return None
 
 
-def label(model: str) -> str:
+def model_label(model: str) -> str:
     """Remove the vendor prefix and build date from a model name."""
     for prefix in ("claude-", "gpt-"):
         model = model.removeprefix(prefix)
     return re.sub(r"-\d{8}$", "", model)
 
 
-def trim(text: str, width: int) -> str:
+def text_trim(text: str, width: int) -> str:
     """Clip text to ``width`` and add an ellipsis when needed."""
     if len(text) <= width:
         return text
@@ -67,17 +87,17 @@ def trim(text: str, width: int) -> str:
     return text[: width - 1] + "…"
 
 
-def short(identifier: str) -> str:
+def id_short(identifier: str) -> str:
     """Shorten a session ID; it's a grouping key, so keep 12 chars for collision resistance."""
     return identifier[:12]
 
 
-def tint(percent: float) -> str:
+def percent_tint(percent: float) -> str:
     """Return green, yellow, or red for a percentage."""
     return "red" if percent >= 85 else "yellow" if percent >= 60 else "green"
 
 
-def sparkline(series: list[float], ceiling: float, floor: float = 0.0) -> str:
+def series_sparkline(series: list[float], ceiling: float, floor: float = 0.0) -> str:
     """Render a scaled series as block characters."""
     if ceiling <= floor:
         return "·" * len(series)
@@ -88,7 +108,7 @@ def sparkline(series: list[float], ceiling: float, floor: float = 0.0) -> str:
     )
 
 
-def resample(series: list[float], width: int) -> list[float]:
+def series_resample(series: list[float], width: int) -> list[float]:
     """Reduce a series to at most ``width`` points by averaging buckets."""
     if width <= 0 or len(series) <= width:
         return series

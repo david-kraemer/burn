@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from operator import attrgetter
 
-from .analysis import tabulate
+from .analysis import snapshot_table
 from .model import Row, Snapshot
 
 TABLE, HELP, FILTER = "table", "help", "filter"
@@ -58,15 +58,15 @@ class View:
         return self.window * 60
 
 
-def rows(view: View, snapshot: Snapshot) -> list[Row]:
+def view_rows(view: View, snapshot: Snapshot) -> list[Row]:
     """The filtered and sorted table."""
     narrowed = snapshot.since(view.seconds).from_agent(view.source)
     return sorted(
-        tabulate(narrowed, view.needle), key=attrgetter(view.sort), reverse=view.reverse
+        snapshot_table(narrowed, view.needle), key=attrgetter(view.sort), reverse=view.reverse
     )
 
 
-def cursor(view: View, table: list[Row]) -> int:
+def view_cursor(view: View, table: list[Row]) -> int:
     """The current selection, starting at the first row."""
     for index, row in enumerate(table):
         if row.key == view.selected:
@@ -74,7 +74,7 @@ def cursor(view: View, table: list[Row]) -> int:
     return 0
 
 
-def viewport(table: list[Row], at: int, capacity: int) -> tuple[list[Row], int]:
+def table_viewport(table: list[Row], at: int, capacity: int) -> tuple[list[Row], int]:
     """Rows to draw while keeping the cursor visible."""
     if len(table) <= capacity:
         return table, 0

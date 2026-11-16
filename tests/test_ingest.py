@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from burn.ingest import Carry, Tailer, read_claude, read_codex, tail
+from burn.ingest import Carry, Tailer, _read_claude, _read_codex, _tail
 from burn.model import CODEX
 
 
@@ -36,7 +36,7 @@ def claude_assistant(**overrides):
 
 
 def test_claude_call_carries_usage_project_and_session():
-    fragment = read_claude([claude_assistant()], Carry())
+    fragment = _read_claude([claude_assistant()], Carry())
     (_, call), = fragment.calls
     assert call.usage.input == 10
     assert call.usage.cache_read == 30
@@ -47,7 +47,7 @@ def test_claude_call_carries_usage_project_and_session():
 def test_claude_merges_the_records_of_one_call():
     # One API call is written as several records, each repeating the usage.
     lines = [claude_assistant(), claude_assistant(message={"content": [{"type": "text"}]})]
-    fragment = read_claude(lines, Carry())
+    fragment = _read_claude(lines, Carry())
     assert len(fragment.calls) == 1
 
 
@@ -55,7 +55,7 @@ def test_claude_registers_tool_use_from_a_record_with_no_usage_of_its_own():
     # The later content-block records carry the tool_use blocks but no usage.
     # Dropping them loses every tool result that follows.
     carry = Carry()
-    read_claude(
+    _read_claude(
         [
             claude_assistant(),
             claude_assistant(
@@ -72,13 +72,13 @@ def test_claude_registers_tool_use_from_a_record_with_no_usage_of_its_own():
         "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
                                  "content": "x" * 400}]},
     }
-    fragment = read_claude([result], carry)
+    fragment = _read_claude([result], carry)
     assert [t.name for t in fragment.tools] == ["Bash"]
     assert fragment.tools[0].size > 400
 
 
 def test_claude_flags_fan_out():
-    fragment = read_claude(
+    fragment = _read_claude(
         [claude_assistant(message={"content": [{"type": "tool_use", "id": "t", "name": "Task"}]})],
         Carry(),
     )
@@ -86,18 +86,18 @@ def test_claude_flags_fan_out():
 
 
 def test_claude_ignores_synthetic_and_unusable_records():
-    assert read_claude([claude_assistant(message={"model": "<synthetic>"})], Carry()).calls == ()
-    assert read_claude([claude_assistant(timestamp="not a date")], Carry()).calls == ()
+    assert _read_claude([claude_assistant(message={"model": "<synthetic>"})], Carry()).calls == ()
+    assert _read_claude([claude_assistant(timestamp="not a date")], Carry()).calls == ()
 
 
 def test_claude_attaches_the_latest_user_prompt():
     carry = Carry()
-    read_claude(
+    _read_claude(
         [{"type": "user", "timestamp": "2026-09-11T11:59:00Z",
           "message": {"content": "why is this slow"}}],
         carry,
     )
-    (_, call), = read_claude([claude_assistant()], carry).calls
+    (_, call), = _read_claude([claude_assistant()], carry).calls
     assert call.prompt == "why is this slow"
 
 
@@ -107,14 +107,14 @@ def codex(kind, payload, at="2026-09-11T12:00:00Z"):
 
 def test_codex_call_inherits_model_and_project_from_earlier_headers():
     carry = Carry(session="s")
-    read_codex(
+    _read_codex(
         [
             codex("session_meta", {"session_id": "abcdefghij", "cwd": "/home/d/spade"}),
             codex("turn_context", {"model": "gpt-5.6-luna"}),
         ],
         carry,
     )
-    fragment = read_codex(
+    fragment = _read_codex(
         [codex("event_msg", {"type": "token_count", "info": {"last_token_usage": {
             "input_tokens": 100, "cached_input_tokens": 90,
             "cache_write_input_tokens": 5, "output_tokens": 7, "total_tokens": 107}}})],
@@ -129,7 +129,7 @@ def test_codex_call_inherits_model_and_project_from_earlier_headers():
 def test_codex_gauges_are_labelled_by_window_length_not_by_key():
     # For six weeks of one history the only gauge present was the seven-day
     # one, reported under the key "primary".
-    fragment = read_codex(
+    fragment = _read_codex(
         [codex("event_msg", {"type": "token_count", "rate_limits": {
             "primary": {"used_percent": 12.0, "window_minutes": 10080}}})],
         Carry(),
@@ -138,7 +138,7 @@ def test_codex_gauges_are_labelled_by_window_length_not_by_key():
 
 
 def test_codex_gauges_come_back_shortest_window_first():
-    fragment = read_codex(
+    fragment = _read_codex(
         [codex("event_msg", {"type": "token_count", "rate_limits": {
             "primary": {"used_percent": 1.0, "window_minutes": 10080},
             "secondary": {"used_percent": 2.0, "window_minutes": 300}}})],
@@ -149,7 +149,7 @@ def test_codex_gauges_come_back_shortest_window_first():
 
 def test_codex_pairs_tool_calls_with_their_output():
     carry = Carry(session="s")
-    fragment = read_codex(
+    fragment = _read_codex(
         [
             codex("response_item", {"type": "function_call", "call_id": "c1", "name": "exec"}),
             codex("response_item", {"type": "function_call_output", "call_id": "c1",
@@ -161,34 +161,34 @@ def test_codex_pairs_tool_calls_with_their_output():
 
 
 def test_malformed_lines_are_skipped_not_fatal():
-    from burn.ingest import parse
+    from burn.ingest import _parse
 
-    assert parse(["{not json", "", json.dumps([1, 2])], "cc", Carry()).calls == ()
+    assert _parse(["{not json", "", json.dumps([1, 2])], "cc", Carry()).calls == ()
 
 
 def test_tail_returns_only_whole_lines_and_resumes_where_it_stopped(tmp_path):
     path = tmp_path / "t.jsonl"
     path.write_text("one\ntwo\npar")
-    lines, offset = tail(path, 0)
+    lines, offset = _tail(path, 0)
     assert lines == ["one", "two"]
 
     path.write_text("one\ntwo\npartial\n")
-    lines, offset = tail(path, offset)
+    lines, offset = _tail(path, offset)
     assert lines == ["partial"]
 
-    assert tail(path, offset) == ([], offset)
+    assert _tail(path, offset) == ([], offset)
 
 
 def test_tail_restarts_when_a_file_shrinks(tmp_path):
     path = tmp_path / "t.jsonl"
     path.write_text("aaaa\nbbbb\n")
-    _, offset = tail(path, 0)
+    _, offset = _tail(path, 0)
     path.write_text("cc\n")
-    assert tail(path, offset)[0] == ["cc"]
+    assert _tail(path, offset)[0] == ["cc"]
 
 
 def test_tail_of_a_missing_file_is_silent(tmp_path):
-    assert tail(tmp_path / "gone.jsonl", 0) == ([], 0)
+    assert _tail(tmp_path / "gone.jsonl", 0) == ([], 0)
 
 
 # ------------------------------------------------------------ quota polling
@@ -208,14 +208,14 @@ def polls(monkeypatch):
     """Disable transcript reads and return scripted quota responses."""
     from burn import ingest
 
-    monkeypatch.setattr(ingest, "transcripts", lambda horizon: [])
+    monkeypatch.setattr(ingest, "_transcripts", lambda horizon: [])
     taken, answers = [], []
 
     def poll():
         taken.append(len(taken))
         return answers[len(taken) - 1]
 
-    monkeypatch.setattr(ingest.quota, "reading", poll)
+    monkeypatch.setattr(ingest.quota, "quota_reading", poll)
     return taken, answers
 
 
@@ -250,7 +250,7 @@ def test_failed_poll_keeps_last_reading(polls, monkeypatch):
 
     taken, answers = polls
     answers.extend([fake_reading(7.0), None])
-    monkeypatch.setattr(ingest, "QUOTA_TTL", 0.0)
+    monkeypatch.setattr(ingest.quota, "QUOTA_TTL", 0.0)
     tailer = Tailer()
     assert sampled(tailer, times=2).reading.windows[0].used_percent == 7.0
     assert len(taken) == 2
@@ -262,7 +262,7 @@ def test_poll_error_does_not_stop_sampling(polls, monkeypatch):
     def explode():
         raise RuntimeError("network error")
 
-    monkeypatch.setattr(ingest.quota, "reading", explode)
+    monkeypatch.setattr(ingest.quota, "quota_reading", explode)
     assert sampled(Tailer()).reading is None
 
 
@@ -278,7 +278,7 @@ def test_quota_wait_ends_at_deadline(polls, monkeypatch):
     from burn import ingest
 
     release = threading.Event()
-    monkeypatch.setattr(ingest.quota, "reading", lambda: release.wait(30))
+    monkeypatch.setattr(ingest.quota, "quota_reading", lambda: release.wait(30))
 
     async def run():
         tailer = Tailer()
@@ -301,8 +301,8 @@ def test_late_poll_updates_later_frame(polls, monkeypatch):
     taken, answers = polls
     answers.append(fake_reading(3.0))
     release = threading.Event()
-    reading = ingest.quota.reading
-    monkeypatch.setattr(ingest.quota, "reading", lambda: release.wait(5) and reading())
+    reading = ingest.quota.quota_reading
+    monkeypatch.setattr(ingest.quota, "quota_reading", lambda: release.wait(5) and reading())
 
     async def run():
         tailer = Tailer()
@@ -314,3 +314,95 @@ def test_late_poll_updates_later_frame(polls, monkeypatch):
     assert missed.reading is None
     assert arrived.reading.windows[0].used_percent == 3.0
     assert len(taken) == 1, "a missed deadline must not start a second request"
+
+
+# ------------------------------------------------------- streamed usage, subagents
+
+
+def test_claude_keeps_the_final_usage_of_a_call_written_as_several_records():
+    # Subagent transcripts write the first content block with a partial output
+    # count; only the call's last record carries the final usage.
+    partial = claude_assistant(message={"usage": {"input_tokens": 2, "output_tokens": 1}})
+    final = claude_assistant(message={"usage": {"input_tokens": 2, "output_tokens": 247}})
+    (_, call), = _read_claude([partial, final], Carry()).calls
+    assert call.usage.output == 247
+
+
+def test_claude_marks_subagent_requests_as_sidechain():
+    (_, call), = _read_claude([claude_assistant(isSidechain=True)], Carry()).calls
+    assert call.sidechain
+    (_, call), = _read_claude([claude_assistant()], Carry()).calls
+    assert not call.sidechain
+
+
+@pytest.fixture
+def trees(monkeypatch, tmp_path):
+    """Point the Tailer at an empty Claude tree laid out as Claude Code writes it."""
+    from burn import ingest
+
+    root = tmp_path / "claude"
+    monkeypatch.setattr(
+        ingest, "TREES", tuple((root, s, p) for _, s, p in ingest.TREES if s == ingest.CLAUDE)
+    )
+    return root
+
+
+def appended(path, *records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as handle:
+        handle.writelines(json.dumps(r) + "\n" for r in records)
+
+
+def recent(**overrides):
+    """A Claude assistant record stamped now, so it falls inside any window."""
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return claude_assistant(timestamp=stamp, **overrides)
+
+
+def test_usage_completed_in_a_later_read_replaces_the_partial_one(trees):
+    path = trees / "-proj" / "session-one-two-three.jsonl"
+    tailer = Tailer(remote=False)
+    appended(path, recent(message={"usage": {"output_tokens": 1}}))
+    asyncio.run(tailer.sample(60))
+    appended(path, recent(message={"usage": {"output_tokens": 247}}))
+    (call,) = asyncio.run(tailer.sample(60)).calls
+    assert call.usage.output == 247
+
+
+def test_subagent_transcripts_are_read_into_the_parent_session(trees):
+    session = trees / "-proj" / "session-one-two-three"
+    appended(session.with_suffix(".jsonl"), recent())
+    appended(session / "subagents" / "agent-a1.jsonl",
+             recent(requestId="r2", isSidechain=True, message={"id": "m2"}))
+    appended(session / "subagents" / "workflows" / "wf_1" / "agent-a2.jsonl",
+             recent(requestId="r3", isSidechain=True, message={"id": "m3"}))
+    calls = asyncio.run(Tailer(remote=False).sample(60)).calls
+    assert len(calls) == 3
+    assert {c.session for c in calls} == {"session-one-"}
+    assert sum(c.sidechain for c in calls) == 2
+
+
+def token_count(at, last, total):
+    return codex("event_msg", {"type": "token_count", "info": {
+        "last_token_usage": last, "total_token_usage": total}}, at=at)
+
+
+def test_codex_does_not_count_a_repeated_token_count_twice():
+    # Codex re-emits token_count with an unchanged running total; the repeat
+    # is not a new request.
+    one = {"input_tokens": 100, "output_tokens": 10, "total_tokens": 110}
+    two = {"input_tokens": 300, "output_tokens": 30, "total_tokens": 330}
+    events = [
+        token_count("2026-11-03T20:51:49Z", one, one),
+        token_count("2026-11-03T20:51:51Z", one, one),
+        token_count("2026-11-03T20:52:30Z", two, {"input_tokens": 400, "output_tokens": 40,
+                                                   "total_tokens": 440}),
+    ]
+    assert len(_read_codex(events, Carry(session="s")).calls) == 2
+
+
+def test_codex_repeat_split_across_reads_is_still_one_request():
+    usage = {"input_tokens": 100, "output_tokens": 10, "total_tokens": 110}
+    carry = Carry(session="s")
+    assert len(_read_codex([token_count("2026-11-03T20:51:49Z", usage, usage)], carry).calls) == 1
+    assert _read_codex([token_count("2026-11-03T20:51:51Z", usage, usage)], carry).calls == ()

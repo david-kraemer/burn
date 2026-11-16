@@ -5,21 +5,21 @@ import asyncio
 import pytest
 from rich.console import Console
 
-from burn.app import monitor, split
+from burn.app import _split, console_monitor
 from burn.state import View
 
 
 def test_a_burst_of_input_splits_into_individual_keys():
-    assert split("jk") == ["j", "k"]
+    assert _split("jk") == ["j", "k"]
 
 
 def test_an_arrow_escape_stays_whole():
-    assert split("\x1b[A") == ["\x1b[A"]
-    assert split("j\x1b[Bk") == ["j", "\x1b[B", "k"]
+    assert _split("\x1b[A") == ["\x1b[A"]
+    assert _split("j\x1b[Bk") == ["j", "\x1b[B", "k"]
 
 
 def test_a_bare_escape_is_its_own_key():
-    assert split("\x1b") == ["\x1b"]
+    assert _split("\x1b") == ["\x1b"]
 
 
 class Keys:
@@ -44,7 +44,7 @@ def scripted(monkeypatch):
         from burn import app
         from burn.model import Snapshot
 
-        monkeypatch.setattr(app, "keyboard", lambda: Keys(keys))
+        monkeypatch.setattr(app, "_keyboard", lambda: Keys(keys))
         seen = []
 
         async def sample(self, window, settle=0.0):
@@ -53,7 +53,7 @@ def scripted(monkeypatch):
 
         monkeypatch.setattr(app.Tailer, "sample", sample)
         console = Console(width=100, height=30, force_terminal=False, no_color=True)
-        asyncio.run(asyncio.wait_for(monitor(console, View(interval=0.01)), timeout=5))
+        asyncio.run(asyncio.wait_for(console_monitor(console, View(interval=0.01)), timeout=5))
         return seen
 
     return drive
@@ -82,7 +82,7 @@ def test_a_sample_in_flight_does_not_block_the_quit_key(monkeypatch):
     from burn import app
     from burn.model import Snapshot
 
-    monkeypatch.setattr(app, "keyboard", lambda: Keys(["q"]))
+    monkeypatch.setattr(app, "_keyboard", lambda: Keys(["q"]))
     taken = []
 
     async def sample(self, window, settle=0.0):
@@ -93,7 +93,7 @@ def test_a_sample_in_flight_does_not_block_the_quit_key(monkeypatch):
 
     monkeypatch.setattr(app.Tailer, "sample", sample)
     console = Console(width=100, height=30, force_terminal=False, no_color=True)
-    asyncio.run(asyncio.wait_for(monitor(console, View(interval=0.0)), timeout=3))
+    asyncio.run(asyncio.wait_for(console_monitor(console, View(interval=0.0)), timeout=3))
 
 
 def test_a_real_sample_leaves_the_event_loop_free(monkeypatch, tmp_path):
@@ -111,7 +111,7 @@ def test_a_real_sample_leaves_the_event_loop_free(monkeypatch, tmp_path):
         time.sleep(0.4)  # stands in for the sweep, reads and parse
         return []
 
-    monkeypatch.setattr(ingest, "transcripts", slow_sweep)
+    monkeypatch.setattr(ingest, "_transcripts", slow_sweep)
 
     async def race():
         ticks = 0

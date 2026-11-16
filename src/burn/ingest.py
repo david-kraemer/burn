@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import quota
-from .format import moment, short
+from .format import id_short, iso_epoch
 from .model import (
     CLAUDE,
     CODEX,
@@ -26,12 +26,15 @@ from .model import (
 CLAUDE_ROOT = Path.home() / ".claude" / "projects"
 CODEX_ROOT = Path.home() / ".codex" / "sessions"
 
-# Quota data comes from the network. Poll it less often than transcripts. Keep
-# the poll off the frame's critical path. Use the cache interval.
-QUOTA_TTL = quota.TTL
+# Claude Code writes each subagent's conversation to its own file under the
+# parent session's directory (``<session>/subagents/[workflows/<id>/]agent-*``).
+# Those records carry the parent's sessionId, so they join the parent's row.
+# Skipping them misses roughly as much usage as the main transcripts hold.
+SUBAGENTS = "*/*/subagents/**/*.jsonl"
 
 TREES = (
     (CLAUDE_ROOT, CLAUDE, "*/*.jsonl"),
+    (CLAUDE_ROOT, CLAUDE, SUBAGENTS),
     (CODEX_ROOT, CODEX, "*/*/*/rollout-*.jsonl"),
 )
 
@@ -56,6 +59,9 @@ class Carry:
     model: str = "?"
     prompt: str = ""
     pending: dict[str, str] = field(default_factory=dict)
+    # Codex's running total at its last token_count event. Codex repeats the
+    # event with an unchanged total; only a change is a new request.
+    total: dict | None = None
 
 
 class Tailer:
@@ -108,14 +114,16 @@ class Tailer:
     def _poll(self, now: float) -> None:
         """Start or collect a quota poll without waiting for it."""
         self._collect()
-        if not self._remote or self._polling is not None or now - self._polled < QUOTA_TTL:
+        # Quota data comes from the network: poll it at the cache interval, less
+        # often than transcripts, and off the frame's critical path.
+        if not self._remote or self._polling is not None or now - self._polled < quota.QUOTA_TTL:
             return
         if self._reading is None:
             # Set the meter height from the cached window shape before the
             # first request. Add the values when the request completes.
-            self._reading = quota.shape()
+            self._reading = quota.quota_shape()
         self._polled = now
-        self._polling = asyncio.create_task(asyncio.to_thread(quota.reading))
+        self._polling = asyncio.create_task(asyncio.to_thread(quota.quota_reading))
 
     def _collect(self) -> None:
         """Store a completed quota poll. Keep the last good reading on failure."""
@@ -130,26 +138,27 @@ class Tailer:
 
     def _read(self, horizon: float) -> list[tuple[Path, int, Fragment]]:
         found = []
-        for path, source in transcripts(horizon):
+        for path, source in _transcripts(horizon):
             stored = self._offsets.get(path, 0)
-            if rewritten(path, stored):
-                # tail() restarts from byte zero; drop the stale Carry so it
+            if _rewritten(path, stored):
+                # _tail() restarts from byte zero; drop the stale Carry so it
                 # doesn't bleed into content read from the start.
                 self._carry.pop(path, None)
-            lines, offset = tail(path, stored)
+            lines, offset = _tail(path, stored)
             if lines:
-                found.append((path, offset, parse(lines, source, self._carry_for(path, source))))
+                found.append((path, offset, _parse(lines, source, self._carry_for(path, source))))
         return found
 
     def _carry_for(self, path: Path, source: str) -> Carry:
         if path not in self._carry:
-            seed = Carry(session=short(path.stem[-36:])) if source == CODEX else Carry()
+            seed = Carry(session=id_short(path.stem[-36:])) if source == CODEX else Carry()
             self._carry[path] = seed
         return self._carry[path]
 
     def _absorb(self, fragment: Fragment) -> None:
         for tag, call in fragment.calls:
-            self._calls.setdefault(tag, call)
+            known = self._calls.get(tag)
+            self._calls[tag] = call if known is None else _merged(known, call)
         for tag in fragment.fanout:
             if (call := self._calls.get(tag)) and not call.fanout:
                 self._calls[tag] = replace(call, fanout=True)
@@ -165,24 +174,23 @@ class Tailer:
 # -------------------------------------------------------------------- parsing
 
 
-def parse(lines: Iterable[str], source: str, carry: Carry) -> Fragment:
+def _parse(lines: Iterable[str], source: str, carry: Carry) -> Fragment:
     """Parse one batch of appended lines."""
-    reader = read_claude if source == CLAUDE else read_codex
-    return reader(decode(lines), carry)
+    reader = _read_claude if source == CLAUDE else _read_codex
+    return reader(_decode(lines), carry)
 
 
-def read_claude(records: Iterable[dict], carry: Carry) -> Fragment:
+def _read_claude(records: Iterable[dict], carry: Carry) -> Fragment:
     """Parse Claude assistant records and merge content blocks."""
-    calls: list[tuple[str, Call]] = []
+    calls: dict[str, Call] = {}
     fanout: list[str] = []
     tools: list[Tooling] = []
-    known: set[str] = set()
 
     for record in records:
         kind = record.get("type")
         message = record.get("message") or {}
         if kind == "user":
-            tools.extend(claude_results(record, message, carry))
+            tools.extend(_claude_results(record, message, carry))
             continue
         if kind != "assistant":
             continue
@@ -190,35 +198,45 @@ def read_claude(records: Iterable[dict], carry: Carry) -> Fragment:
         tag = f"cc|{message.get('id')}|{record.get('requestId')}"
         usage = message.get("usage")
         model = message.get("model")
-        at = moment(record.get("timestamp"))
-        if tag not in known and usage and model and model != "<synthetic>" and at is not None:
-            known.add(tag)
+        at = iso_epoch(record.get("timestamp"))
+        if usage and model and model != "<synthetic>" and at is not None:
             creation = usage.get("cache_creation") or {}
             details = usage.get("output_tokens_details") or {}
-            calls.append((
-                tag,
-                Call(
-                    at=at,
-                    source=CLAUDE,
-                    session=short(record.get("sessionId") or "?"),
-                    project=Path(record.get("cwd") or "?").name,
-                    model=model,
-                    usage=claude_usage(usage),
-                    thinking=details.get("thinking_tokens") or 0,
-                    cache_5m=creation.get("ephemeral_5m_input_tokens") or 0,
-                    cache_1h=creation.get("ephemeral_1h_input_tokens") or 0,
-                    prompt=carry.prompt,
-                ),
-            ))
-        for block in blocks(message):
+            call = Call(
+                at=at,
+                source=CLAUDE,
+                session=id_short(record.get("sessionId") or "?"),
+                project=Path(record.get("cwd") or "?").name,
+                model=model,
+                usage=claude_usage(usage),
+                thinking=details.get("thinking_tokens") or 0,
+                cache_5m=creation.get("ephemeral_5m_input_tokens") or 0,
+                cache_1h=creation.get("ephemeral_1h_input_tokens") or 0,
+                prompt=carry.prompt,
+                sidechain=bool(record.get("isSidechain")),
+            )
+            calls[tag] = _merged(calls[tag], call) if tag in calls else call
+        for block in _blocks(message):
             if block.get("type") == "tool_use":
                 carry.pending[block.get("id")] = block.get("name")
                 if block.get("name") in FANOUT_TOOLS:
                     fanout.append(tag)
-    return Fragment(calls=tuple(calls), fanout=tuple(fanout), tools=tuple(tools))
+    return Fragment(calls=tuple(calls.items()), fanout=tuple(fanout), tools=tuple(tools))
 
 
-def claude_results(record: dict, message: dict, carry: Carry) -> Iterator[Tooling]:
+def _merged(known: Call, later: Call) -> Call:
+    """One call written as several records: the later record's usage wins.
+
+    Claude Code writes a record per content block, each repeating the usage.
+    In subagent transcripts the early records carry a partial output count;
+    only the last one is final. Keep the first record's time and prompt.
+    """
+    return replace(
+        later, at=known.at, prompt=known.prompt, fanout=known.fanout or later.fanout
+    )
+
+
+def _claude_results(record: dict, message: dict, carry: Carry) -> Iterator[Tooling]:
     """Parse tool results and user text from one ``user`` record."""
     content = message.get("content")
     if isinstance(content, str):
@@ -232,8 +250,8 @@ def claude_results(record: dict, message: dict, carry: Carry) -> Iterator[Toolin
             name = carry.pending.pop(block.get("tool_use_id"), None)
             if name:
                 yield Tooling(
-                    at=moment(record.get("timestamp")) or 0.0,
-                    session=short(record.get("sessionId") or "?"),
+                    at=iso_epoch(record.get("timestamp")) or 0.0,
+                    session=id_short(record.get("sessionId") or "?"),
                     name=name,
                     size=len(json.dumps(block.get("content") or "")),
                 )
@@ -241,7 +259,7 @@ def claude_results(record: dict, message: dict, carry: Carry) -> Iterator[Toolin
             carry.prompt = block["text"]
 
 
-def read_codex(records: Iterable[dict], carry: Carry) -> Fragment:
+def _read_codex(records: Iterable[dict], carry: Carry) -> Fragment:
     """Parse Codex ``token_count`` events."""
     calls: list[tuple[str, Call]] = []
     tools: list[Tooling] = []
@@ -250,7 +268,7 @@ def read_codex(records: Iterable[dict], carry: Carry) -> Fragment:
 
     for record in records:
         payload = record.get("payload") or {}
-        at = moment(record.get("timestamp")) or 0.0
+        at = iso_epoch(record.get("timestamp")) or 0.0
         match record.get("type"):
             case "session_meta":
                 # Ignore session_id here: a sub-agent's rollout file reports
@@ -261,22 +279,22 @@ def read_codex(records: Iterable[dict], carry: Carry) -> Fragment:
                 carry.model = payload.get("model") or carry.model
                 carry.project = Path(payload.get("cwd") or carry.project).name
             case "response_item":
-                tools.extend(codex_results(payload, at, carry))
+                tools.extend(_codex_results(payload, at, carry))
             case "event_msg":
                 if payload.get("type") == "user_message":
                     carry.prompt = payload.get("message") or carry.prompt
                 elif payload.get("type") == "token_count":
                     stamp = record.get("timestamp") or ""
                     if (reported := payload.get("rate_limits")) and stamp > gauges_at:
-                        gauges, gauges_at = codex_gauges(reported), stamp
-                    if entry := codex_call(payload, at, stamp, carry):
+                        gauges, gauges_at = _codex_gauges(reported), stamp
+                    if entry := _codex_call(payload, at, stamp, carry):
                         calls.append(entry)
     return Fragment(
         calls=tuple(calls), tools=tuple(tools), gauges=gauges, gauges_at=gauges_at
     )
 
 
-def codex_results(payload: dict, at: float, carry: Carry) -> Iterator[Tooling]:
+def _codex_results(payload: dict, at: float, carry: Carry) -> Iterator[Tooling]:
     """Parse tool calls and outputs from one ``response_item`` record."""
     kind = payload.get("type")
     if kind in ("custom_tool_call", "function_call"):
@@ -287,11 +305,16 @@ def codex_results(payload: dict, at: float, carry: Carry) -> Iterator[Tooling]:
             yield Tooling(at, carry.session, name, len(json.dumps(payload.get("output") or "")))
 
 
-def codex_call(payload: dict, at: float, stamp: str, carry: Carry) -> tuple[str, Call] | None:
+def _codex_call(payload: dict, at: float, stamp: str, carry: Carry) -> tuple[str, Call] | None:
     """Parse the request described by a ``token_count`` event."""
-    usage = (payload.get("info") or {}).get("last_token_usage")
+    info = payload.get("info") or {}
+    usage = info.get("last_token_usage")
     if not usage:
         return None
+    if (total := info.get("total_token_usage")) is not None:
+        if total == carry.total:
+            return None  # A repeated event: the running total did not move.
+        carry.total = total
     cached = usage.get("cached_input_tokens") or 0
     return (
         f"cx|{carry.session}|{stamp}|{usage.get('total_tokens')}",
@@ -313,7 +336,7 @@ def codex_call(payload: dict, at: float, stamp: str, carry: Carry) -> tuple[str,
     )
 
 
-def codex_gauges(reported: dict) -> tuple[Gauge, ...]:
+def _codex_gauges(reported: dict) -> tuple[Gauge, ...]:
     """Parse and sort Codex quota windows by length."""
     found = []
     for name in ("primary", "secondary"):
@@ -338,7 +361,7 @@ def claude_usage(usage: dict) -> Usage:
     )
 
 
-def blocks(message: dict) -> Iterator[dict]:
+def _blocks(message: dict) -> Iterator[dict]:
     for block in message.get("content") or []:
         if isinstance(block, dict):
             yield block
@@ -347,7 +370,7 @@ def blocks(message: dict) -> Iterator[dict]:
 # --------------------------------------------------------------------- files
 
 
-def transcripts(horizon: float) -> list[tuple[Path, str]]:
+def _transcripts(horizon: float) -> list[tuple[Path, str]]:
     """Return transcript files changed since ``horizon``."""
     found = []
     for root, source, pattern in TREES:
@@ -360,7 +383,7 @@ def transcripts(horizon: float) -> list[tuple[Path, str]]:
     return found
 
 
-def rewritten(path: Path, offset: int) -> bool:
+def _rewritten(path: Path, offset: int) -> bool:
     """Whether ``path`` has shrunk below ``offset`` (rewritten or rotated)."""
     try:
         return path.stat().st_size < offset
@@ -368,7 +391,7 @@ def rewritten(path: Path, offset: int) -> bool:
         return False
 
 
-def tail(path: Path, offset: int) -> tuple[list[str], int]:
+def _tail(path: Path, offset: int) -> tuple[list[str], int]:
     """Read complete lines after ``offset`` and return the new offset."""
     try:
         size = path.stat().st_size
@@ -392,16 +415,16 @@ def tail(path: Path, offset: int) -> tuple[list[str], int]:
     return blob[:end].decode("utf-8", "replace").split("\n"), offset + end + 1
 
 
-def records(path: Path) -> Iterator[dict]:
+def transcript_records(path: Path) -> Iterator[dict]:
     """Yield every record in a file."""
     try:
         with path.open(errors="replace") as handle:
-            yield from decode(handle)
+            yield from _decode(handle)
     except OSError:
         return
 
 
-def decode(lines: Iterable[str]) -> Iterator[dict]:
+def _decode(lines: Iterable[str]) -> Iterator[dict]:
     for line in lines:
         try:
             record = json.loads(line)

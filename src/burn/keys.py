@@ -1,4 +1,7 @@
-"""Map keypresses to view state. ``apply`` is total, pure, and returns None only to mean quit."""
+"""Map keypresses to view state.
+
+``key_apply`` is total, pure, and returns None only to mean quit.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +20,7 @@ from .state import (
     TOOLS,
     TURNS,
     View,
-    cursor,
+    view_cursor,
 )
 
 UP = ("k", "\x1b[A")
@@ -55,16 +58,16 @@ HELP_TEXT = (
 )
 
 
-def apply(key: str, view: View, table: Sequence[Row]) -> View | None:
+def key_apply(key: str, view: View, table: Sequence[Row]) -> View | None:
     """Return the next view, or None to quit."""
     if view.mode == FILTER:
-        return typing(key, view)
+        return _typing(key, view)
     if view.mode == HELP:
         return replace(view, mode=TABLE)
-    return command(key, view, table)
+    return _command(key, view, table)
 
 
-def typing(key: str, view: View) -> View:
+def _typing(key: str, view: View) -> View:
     """Filter-entry state."""
     if key in ENTER:
         return replace(view, needle=view.draft, mode=TABLE)
@@ -75,7 +78,7 @@ def typing(key: str, view: View) -> View:
     return replace(view, draft=view.draft + key) if key.isprintable() else view
 
 
-def command(key: str, view: View, table: Sequence[Row]) -> View | None:
+def _command(key: str, view: View, table: Sequence[Row]) -> View | None:
     """A keypress while the table is active."""
     match key:
         case k if k in QUIT:
@@ -85,15 +88,15 @@ def command(key: str, view: View, table: Sequence[Row]) -> View | None:
         case " ":
             return replace(view, paused=not view.paused)
         case k if k in DOWN:
-            return replace(view, selected=step(view, table, +1))
+            return replace(view, selected=_step(view, table, +1))
         case k if k in UP:
-            return replace(view, selected=step(view, table, -1))
+            return replace(view, selected=_step(view, table, -1))
         case k if k in ENTER:
-            return replace(view, zoomed=not view.zoomed, selected=step(view, table, 0))
+            return replace(view, zoomed=not view.zoomed, selected=_step(view, table, 0))
         case "t":
             return replace(view, panel=TURNS if view.panel == TOOLS else TOOLS)
         case "s" | "S":
-            return replace(view, sort=cycle(view.sort, +1 if key == "s" else -1))
+            return replace(view, sort=_cycle(view.sort, +1 if key == "s" else -1))
         case "r":
             return replace(view, reverse=not view.reverse)
         case "/":
@@ -110,14 +113,14 @@ def command(key: str, view: View, table: Sequence[Row]) -> View | None:
             return view
 
 
-def step(view: View, table: Sequence[Row], by: int) -> str | None:
+def _step(view: View, table: Sequence[Row], by: int) -> str | None:
     """Return the selected row's key, clamped to the table."""
     if not table:
         return None
-    at = min(max(cursor(view, list(table)) + by, 0), len(table) - 1)
+    at = min(max(view_cursor(view, list(table)) + by, 0), len(table) - 1)
     return table[at].key
 
 
-def cycle(sort: str, by: int) -> str:
+def _cycle(sort: str, by: int) -> str:
     names = [field for field, _ in SORTS]
     return names[(names.index(sort) + by) % len(names)]

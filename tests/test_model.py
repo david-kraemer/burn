@@ -1,6 +1,6 @@
 """Weights, snapshot narrowing, and the thread-splitting heuristic."""
 
-from burn.model import Snapshot, Usage, compactions, threads
+from burn.model import Snapshot, Usage, calls_compactions, calls_threads
 
 
 def test_weight_prices_each_token_class():
@@ -41,18 +41,18 @@ def test_threads_separate_interleaved_conversations(call):
     # Codex runs side threads under one session id: read as one conversation,
     # every switch back up looks like a huge injection of fresh context.
     calls = [call(usage=Usage(cache_read=n)) for n in (100, 160, 110, 170)]
-    strands = threads(calls)
+    strands = calls_threads(calls)
     assert [[c.prefix for c in strand] for strand in strands] == [[100, 160, 170], [110]]
 
 
 def test_threads_start_a_new_strand_after_a_compaction(call):
     calls = [call(usage=Usage(cache_read=n)) for n in (100, 200, 20, 40)]
-    assert [[c.prefix for c in s] for s in threads(calls)] == [[100, 200], [20, 40]]
+    assert [[c.prefix for c in s] for s in calls_threads(calls)] == [[100, 200], [20, 40]]
 
 
 def test_compactions_counts_collapses(call):
     calls = [call(usage=Usage(cache_read=n)) for n in (100, 200, 20, 40)]
-    assert compactions(calls) == 1
+    assert calls_compactions(calls) == 1
 
 
 def test_empty_snapshot_is_usable():

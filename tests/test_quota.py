@@ -16,7 +16,7 @@ from burn.model import Quota, Reading, Spend
 
 # The offline fixture replaces the module attribute. Keep the real function so
 # the request path can be tested.
-REPORTED = quota.reported
+REPORTED = quota._reported
 
 
 def opened(payload):
@@ -42,41 +42,41 @@ PAYLOAD = {
 
 
 def test_session_window_is_first():
-    assert [w.name for w in quota.windows(PAYLOAD)] == ["5h", "week", "week"]
+    assert [w.name for w in quota._windows(PAYLOAD)] == ["5h", "week", "week"]
 
 
 def test_scoped_window_has_model_name():
-    scoped = [w for w in quota.windows(PAYLOAD) if w.scope]
+    scoped = [w for w in quota._windows(PAYLOAD) if w.scope]
     assert [(w.scope, w.used_percent) for w in scoped] == [("Fable", 6.0)]
 
 
 def test_active_window_governs():
-    assert [w.used_percent for w in quota.windows(PAYLOAD) if w.active] == [8.0]
+    assert [w.used_percent for w in quota._windows(PAYLOAD) if w.active] == [8.0]
 
 
 def test_reset_time_is_parsed_as_epoch():
-    session = quota.windows(PAYLOAD)[0]
+    session = quota._windows(PAYLOAD)[0]
     assert session.resets_at == pytest.approx(1789512599.0)
 
 
 def test_unknown_window_keeps_name_and_is_last():
     payload = {"limits": [{"kind": "lunar", "group": "lunar", "percent": 3}, *PAYLOAD["limits"]]}
-    assert [w.name for w in quota.windows(payload)] == ["5h", "week", "week", "lunar"]
+    assert [w.name for w in quota._windows(payload)] == ["5h", "week", "week", "lunar"]
 
 
 def test_malformed_limits_yield_no_windows():
-    assert quota.windows({}) == ()
-    assert quota.windows({"limits": ["nonsense", None]}) == ()
+    assert quota._windows({}) == ()
+    assert quota._windows({"limits": ["nonsense", None]}) == ()
 
 
 def test_credits_use_major_currency_units():
-    assert quota.spend(PAYLOAD) == Spend(used=261.32, cap=750.0)
+    assert quota._spend(PAYLOAD) == Spend(used=261.32, cap=750.0)
 
 
 def test_disabled_or_missing_credits_return_none():
-    assert quota.spend({}) is None
-    assert quota.spend({"spend": {**PAYLOAD["spend"], "enabled": False}}) is None
-    assert quota.spend({"spend": {"enabled": True}}) is None
+    assert quota._spend({}) is None
+    assert quota._spend({"spend": {**PAYLOAD["spend"], "enabled": False}}) is None
+    assert quota._spend({"spend": {"enabled": True}}) is None
 
 
 def test_zero_cap_gives_zero_percent():
@@ -99,30 +99,30 @@ def keychain(monkeypatch, stdout):
 
 def test_live_token_is_read_from_keychain(monkeypatch):
     keychain(monkeypatch, credentials(expiresAt=(time.time() + 3600) * 1000))
-    assert quota.token() == "sk-live"
+    assert quota._token() == "sk-live"
 
 
 def test_expired_token_is_not_refreshed(monkeypatch):
     """Claude Code replaces expired keychain tokens. Do not write a token."""
     keychain(monkeypatch, credentials(expiresAt=(time.time() - 1) * 1000))
-    assert quota.token() is None
+    assert quota._token() is None
 
 
 def test_missing_or_invalid_keychain_item_returns_none(monkeypatch):
     keychain(monkeypatch, "not json")
-    assert quota.token() is None
+    assert quota._token() is None
     keychain(monkeypatch, json.dumps({"other": {}}))
-    assert quota.token() is None
+    assert quota._token() is None
 
     def absent(*args, **kwargs):
         raise subprocess.CalledProcessError(44, "security")
 
     monkeypatch.setattr(quota.subprocess, "run", absent)
-    assert quota.token() is None
+    assert quota._token() is None
 
 
 def test_missing_token_skips_request(monkeypatch):
-    monkeypatch.setattr(quota, "token", lambda: None)
+    monkeypatch.setattr(quota, "_token", lambda: None)
     monkeypatch.setattr(quota.urllib.request, "urlopen", lambda *a, **k: pytest.fail("polled"))
     assert REPORTED().payload is None
 
@@ -135,8 +135,8 @@ def test_keychain_delay_shortens_the_request(monkeypatch):
 
     Quitting cannot cancel this work. Their sum would delay the terminal.
     """
-    monkeypatch.setattr(quota, "TIMEOUT", 1.0)
-    monkeypatch.setattr(quota, "token", lambda: time.sleep(0.4) or "sk-live")
+    monkeypatch.setattr(quota, "QUOTA_TIMEOUT", 1.0)
+    monkeypatch.setattr(quota, "_token", lambda: time.sleep(0.4) or "sk-live")
     allowed = []
     monkeypatch.setattr(
         quota.urllib.request, "urlopen",
@@ -147,8 +147,8 @@ def test_keychain_delay_shortens_the_request(monkeypatch):
 
 
 def test_spent_deadline_skips_the_request(monkeypatch):
-    monkeypatch.setattr(quota, "TIMEOUT", 0.05)
-    monkeypatch.setattr(quota, "token", lambda: time.sleep(0.1) or "sk-live")
+    monkeypatch.setattr(quota, "QUOTA_TIMEOUT", 0.05)
+    monkeypatch.setattr(quota, "_token", lambda: time.sleep(0.1) or "sk-live")
     monkeypatch.setattr(
         quota.urllib.request, "urlopen", lambda *a, **k: pytest.fail("requested past deadline")
     )
@@ -159,28 +159,28 @@ def test_spent_deadline_skips_the_request(monkeypatch):
 
 
 def test_only_objects_are_payloads():
-    assert quota.answered({"limits": []}) == {"limits": []}
-    assert quota.answered(["nonsense"]) is None
-    assert quota.answered("nonsense") is None
-    assert quota.answered(None) is None
+    assert quota._answered({"limits": []}) == {"limits": []}
+    assert quota._answered(["nonsense"]) is None
+    assert quota._answered("nonsense") is None
+    assert quota._answered(None) is None
 
 
 def test_non_object_answer_leaves_no_reading(monkeypatch):
     """The parser reads an object. Do not pass a list to it."""
-    monkeypatch.setattr(quota, "token", lambda: "sk-live")
+    monkeypatch.setattr(quota, "_token", lambda: "sk-live")
     monkeypatch.setattr(quota.urllib.request, "urlopen", lambda *a, **k: opened(["nonsense"]))
-    monkeypatch.setattr(quota, "reported", REPORTED)
-    assert quota.reading() is None
+    monkeypatch.setattr(quota, "_reported", REPORTED)
+    assert quota.quota_reading() is None
 
 
 def test_unreachable_endpoint_returns_no_quota(monkeypatch):
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response())
-    assert quota.reading() is None
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response())
+    assert quota.quota_reading() is None
 
 
 def test_reading_contains_windows_credits_and_timestamp(monkeypatch):
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response(PAYLOAD))
-    taken = quota.reading()
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response(PAYLOAD))
+    taken = quota.quota_reading()
     assert isinstance(taken, Reading)
     assert taken.spend == Spend(261.32, 750.0)
     assert all(isinstance(w, Quota) for w in taken.windows)
@@ -199,56 +199,56 @@ def polled(monkeypatch):
         made.append(len(made))
         return quota.Response(PAYLOAD)
 
-    monkeypatch.setattr(quota, "reported", reported)
+    monkeypatch.setattr(quota, "_reported", reported)
     return made
 
 
 def test_reading_survives_cache_round_trip(polled):
-    taken = quota.reading()
-    assert quota.cached() == (taken, 0.0)
+    taken = quota.quota_reading()
+    assert quota._cached() == (taken, 0.0)
 
 
 def test_fresh_cache_skips_request(polled):
-    quota.reading()
-    quota.reading()
+    quota.quota_reading()
+    quota.quota_reading()
     assert len(polled) == 1, "a second process must not request in this interval"
 
 
 def test_stale_cache_is_refreshed(polled, monkeypatch):
-    quota.reading()
-    monkeypatch.setattr(quota, "TTL", 0.0)
-    quota.reading()
+    quota.quota_reading()
+    monkeypatch.setattr(quota, "QUOTA_TTL", 0.0)
+    quota.quota_reading()
     assert len(polled) == 2
 
 
 def test_unreachable_endpoint_keeps_current_reading(polled, monkeypatch):
     """A failed request does not remove the current reading."""
-    taken = quota.reading()
-    monkeypatch.setattr(quota, "TTL", 0.0)
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response())
-    assert quota.reading() == taken
+    taken = quota.quota_reading()
+    monkeypatch.setattr(quota, "QUOTA_TTL", 0.0)
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response())
+    assert quota.quota_reading() == taken
 
 
 def test_stale_reading_keeps_windows_but_not_values(
     polled, monkeypatch
 ):
     """Keep the layout. Do not show stale percentages as current values."""
-    taken = quota.reading()
-    monkeypatch.setattr(quota, "TTL", 0.0)
-    monkeypatch.setattr(quota, "STALE", 0.0)
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response())
-    unread = quota.reading()
+    taken = quota.quota_reading()
+    monkeypatch.setattr(quota, "QUOTA_TTL", 0.0)
+    monkeypatch.setattr(quota, "QUOTA_STALE", 0.0)
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response())
+    unread = quota.quota_reading()
     assert unread.pending
     assert unread.windows == taken.windows
     assert replace(unread, pending=False) == taken
 
 
 def test_corrupt_cache_returns_no_reading(polled):
-    quota.reading()
+    quota.quota_reading()
     quota.CACHE.write_text("{ not json")
-    assert quota.cached() == (None, 0.0)
+    assert quota._cached() == (None, 0.0)
     quota.CACHE.write_text(json.dumps({"at": 1.0, "windows": [{"bogus": 1}]}))
-    assert quota.cached() == (None, 0.0)
+    assert quota._cached() == (None, 0.0)
 
 
 def test_unwritable_cache_does_not_break_reading(polled, monkeypatch, tmp_path):
@@ -256,13 +256,13 @@ def test_unwritable_cache_does_not_break_reading(polled, monkeypatch, tmp_path):
     blocked = tmp_path / "blocked"
     blocked.write_text("this is a file, not the cache directory")
     monkeypatch.setattr(quota, "CACHE", blocked / "quota.json")
-    assert quota.reading() is not None
-    assert quota.cached() == (None, 0.0)
+    assert quota.quota_reading() is not None
+    assert quota._cached() == (None, 0.0)
 
 
 def test_missing_cache_and_endpoint_return_none(monkeypatch):
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response())
-    assert quota.reading() is None
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response())
+    assert quota.quota_reading() is None
 
 
 # ---------------------------------------------------------------- rate limits
@@ -274,50 +274,50 @@ def refusal(code, retry_after=None):
 
 
 def test_rate_limit_wait_uses_retry_after():
-    assert quota.patience(refusal(429, "161")) == 161.0
+    assert quota._patience(refusal(429, "161")) == 161.0
 
 
 def test_rate_limit_without_valid_delay_uses_ttl():
-    assert quota.patience(refusal(429)) == quota.TTL
-    assert quota.patience(refusal(429, "soon")) == quota.TTL
+    assert quota._patience(refusal(429)) == quota.QUOTA_TTL
+    assert quota._patience(refusal(429, "soon")) == quota.QUOTA_TTL
 
 
 def test_rate_limit_delay_is_capped():
-    assert quota.patience(refusal(429, "999999")) == quota.MAX_BACKOFF
+    assert quota._patience(refusal(429, "999999")) == quota.MAX_BACKOFF
 
 
 def test_other_http_errors_do_not_delay_request():
-    assert quota.patience(refusal(401)) == 0.0
-    assert quota.patience(refusal(500)) == 0.0
+    assert quota._patience(refusal(401)) == 0.0
+    assert quota._patience(refusal(500)) == 0.0
 
 
 def test_rate_limit_delays_next_process(polled, monkeypatch):
     """The cache applies the delay to later one-shot processes."""
-    taken = quota.reading()
-    monkeypatch.setattr(quota, "TTL", 0.0)
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response(retry_after=300.0))
-    assert quota.reading() == taken
+    taken = quota.quota_reading()
+    monkeypatch.setattr(quota, "QUOTA_TTL", 0.0)
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response(retry_after=300.0))
+    assert quota.quota_reading() == taken
 
     asked = []
-    monkeypatch.setattr(quota, "reported", lambda: asked.append(1) or quota.Response(PAYLOAD))
-    assert quota.reading() == taken
+    monkeypatch.setattr(quota, "_reported", lambda: asked.append(1) or quota.Response(PAYLOAD))
+    assert quota.quota_reading() == taken
     assert asked == [], "burn must apply the requested delay to later processes"
 
 
 def test_rate_limit_wait_expires(polled, monkeypatch):
-    quota.reading()
-    monkeypatch.setattr(quota, "TTL", 0.0)
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response(retry_after=-1.0))
-    quota.reading()
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response(PAYLOAD))
-    assert quota.reading().windows, "an expired delay must allow a request"
+    quota.quota_reading()
+    monkeypatch.setattr(quota, "QUOTA_TTL", 0.0)
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response(retry_after=-1.0))
+    quota.quota_reading()
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response(PAYLOAD))
+    assert quota.quota_reading().windows, "an expired delay must allow a request"
 
 
 def test_rate_limit_without_cache_delays_next_run(monkeypatch):
-    monkeypatch.setattr(quota, "reported", lambda: quota.Response(retry_after=300.0))
-    assert quota.reading() is None
-    monkeypatch.setattr(quota, "reported", lambda: pytest.fail("request made during delay"))
-    assert quota.reading() is None
+    monkeypatch.setattr(quota, "_reported", lambda: quota.Response(retry_after=300.0))
+    assert quota.quota_reading() is None
+    monkeypatch.setattr(quota, "_reported", lambda: pytest.fail("request made during delay"))
+    assert quota.quota_reading() is None
 
 
 # --------------------------------------------------------------------- claim
@@ -325,28 +325,28 @@ def test_rate_limit_without_cache_delays_next_run(monkeypatch):
 
 def test_claim_blocks_a_concurrent_request(polled, monkeypatch):
     """Instances started together can reach the request. The claim allows one request."""
-    taken = quota.reading()
-    monkeypatch.setattr(quota, "TTL", 0.0)
-    assert quota.leased(), "the claim must be free after a completed request"
-    monkeypatch.setattr(quota, "reported", lambda: pytest.fail("requested under a claim"))
-    assert quota.reading() == taken
-    quota.release()
+    taken = quota.quota_reading()
+    monkeypatch.setattr(quota, "QUOTA_TTL", 0.0)
+    assert quota._leased(), "the claim must be free after a completed request"
+    monkeypatch.setattr(quota, "_reported", lambda: pytest.fail("requested under a claim"))
+    assert quota.quota_reading() == taken
+    quota._release()
 
 
 def test_expired_claim_is_reclaimed(polled, monkeypatch):
     """A dead process must not block later instances."""
-    quota.reading()
-    monkeypatch.setattr(quota, "TTL", 0.0)
-    assert quota.leased()
-    monkeypatch.setattr(quota, "TIMEOUT", 0.0)  # Every claim is older than a request.
-    assert quota.reading().windows
+    quota.quota_reading()
+    monkeypatch.setattr(quota, "QUOTA_TTL", 0.0)
+    assert quota._leased()
+    monkeypatch.setattr(quota, "QUOTA_TIMEOUT", 0.0)  # Every claim is older than a request.
+    assert quota.quota_reading().windows
 
 
 def test_failed_request_drops_claim(polled, monkeypatch):
-    monkeypatch.setattr(quota, "reported", lambda: 1 / 0)
+    monkeypatch.setattr(quota, "_reported", lambda: 1 / 0)
     with pytest.raises(ZeroDivisionError):
-        quota.reading()
-    assert quota.leased(), "a raising request must still drop the claim"
+        quota.quota_reading()
+    assert quota._leased(), "a raising request must still drop the claim"
 
 
 WORKER = '''
@@ -362,11 +362,11 @@ def reported():
     time.sleep(0.3)  # A real request takes time. The claim must outlast it.
     return quota.Response({"limits": [{"kind": "session", "group": "session", "percent": 5}]})
 
-quota.reported = reported
+quota._reported = reported
 (gate / f"ready.{os.getpid()}").write_text("")
 while len(list(gate.glob("ready.*"))) < wanted:
     time.sleep(0.005)  # Make the processes cross the cache check together.
-quota.reading()
+quota.quota_reading()
 '''
 
 
@@ -388,7 +388,7 @@ def test_unusable_cache_does_not_block_request(polled, monkeypatch, tmp_path):
     blocked = tmp_path / "blocked"
     blocked.write_text("this is a file, not the cache directory")
     monkeypatch.setattr(quota, "CACHE", blocked / "quota.json")
-    assert quota.leased() and quota.leased()
+    assert quota._leased() and quota._leased()
 
 
 # --------------------------------------------------------------------- shape
@@ -396,20 +396,20 @@ def test_unusable_cache_does_not_block_request(polled, monkeypatch, tmp_path):
 
 def test_cached_shape_is_available_before_request(polled, monkeypatch):
     """The first frame can draw rows without waiting for the network."""
-    taken = quota.reading()
-    monkeypatch.setattr(quota, "reported", lambda: pytest.fail("shape requested from network"))
-    monkeypatch.setattr(quota, "STALE", 0.0)
-    drawn = quota.shape()
+    taken = quota.quota_reading()
+    monkeypatch.setattr(quota, "_reported", lambda: pytest.fail("shape requested from network"))
+    monkeypatch.setattr(quota, "QUOTA_STALE", 0.0)
+    drawn = quota.quota_shape()
     assert drawn.pending
     assert [w.name for w in drawn.windows] == [w.name for w in taken.windows]
 
 
 def test_current_shape_carries_values(polled, monkeypatch):
-    quota.reading()
-    monkeypatch.setattr(quota, "TTL", 0.0)  # Refresh due, but values are still current.
-    monkeypatch.setattr(quota, "reported", lambda: pytest.fail("shape requested from network"))
-    assert not quota.shape().pending
+    quota.quota_reading()
+    monkeypatch.setattr(quota, "QUOTA_TTL", 0.0)  # Refresh due, but values are still current.
+    monkeypatch.setattr(quota, "_reported", lambda: pytest.fail("shape requested from network"))
+    assert not quota.quota_shape().pending
 
 
 def test_no_shape_exists_before_first_reading():
-    assert quota.shape() is None
+    assert quota.quota_shape() is None

@@ -23,18 +23,18 @@ from rich.console import Console
 from rich.live import Live
 
 from . import keys as bindings
-from .dashboard import dashboard
+from .dashboard import snapshot_dashboard
 from .ingest import Tailer
 from .model import Snapshot
-from .state import View, rows
+from .state import View, view_rows
 
 CSI = "\x1b["
 
 
-async def monitor(console: Console, view: View, remote: bool = True) -> None:
+async def console_monitor(console: Console, view: View, remote: bool = True) -> None:
     """Redraw on a timer or after a keypress."""
     tailer = Tailer(remote=remote)
-    async with keyboard() as pressed:
+    async with _keyboard() as pressed:
         # Sample before the alternate screen so the first frame isn't empty.
         # Do not wait for quota data. Use the cached window shape for meter
         # height. Add the values after the request completes.
@@ -46,7 +46,8 @@ async def monitor(console: Console, view: View, remote: bool = True) -> None:
             resample_now = False
             try:
                 while True:
-                    live.update(dashboard(snapshot, view, console.size.height), refresh=True)
+                    frame = snapshot_dashboard(snapshot, view, console.size.height)
+                    live.update(frame, refresh=True)
                     now = time.monotonic()
                     if sampling is None and not view.paused and (resample_now or now >= due):
                         sampling = asyncio.create_task(tailer.sample(view.window))
@@ -70,7 +71,7 @@ async def monitor(console: Console, view: View, remote: bool = True) -> None:
                     if waiting in done:
                         key = waiting.result()
                         waiting = None
-                        updated = bindings.apply(key, view, rows(view, snapshot))
+                        updated = bindings.key_apply(key, view, view_rows(view, snapshot))
                         if updated is None:
                             return
                         if updated.window != view.window:
@@ -88,7 +89,7 @@ async def monitor(console: Console, view: View, remote: bool = True) -> None:
 
 
 @asynccontextmanager
-async def keyboard() -> AsyncIterator[asyncio.Queue[str]]:
+async def _keyboard() -> AsyncIterator[asyncio.Queue[str]]:
     """Return queued keypresses, or none when stdin is not a terminal."""
     queue: asyncio.Queue[str] = asyncio.Queue()
     if not sys.stdin.isatty():
@@ -106,7 +107,7 @@ async def keyboard() -> AsyncIterator[asyncio.Queue[str]]:
             data = os.read(fd, 1024)
         except OSError:
             return
-        for key in split(decoder.decode(data)):
+        for key in _split(decoder.decode(data)):
             queue.put_nowait(key)
 
     try:
@@ -118,7 +119,7 @@ async def keyboard() -> AsyncIterator[asyncio.Queue[str]]:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
-def split(data: str) -> list[str]:
+def _split(data: str) -> list[str]:
     """Read one burst of input and keep arrow escapes intact."""
     found, at = [], 0
     while at < len(data):
