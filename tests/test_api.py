@@ -50,11 +50,12 @@ def test_reset_times_stay_raw_epochs(reported):
 
 
 def test_the_document_says_how_old_its_quota_is(reported):
-    from dataclasses import replace
+    import dataclasses
 
     doc = burn.burn_document(reported, View())
     assert (doc["schema"], doc["quota_at"], doc["quota_pending"]) == (1, 990.0, False)
-    stale = replace(reported, reading=replace(reported.reading, pending=True))
+    pending = dataclasses.replace(reported.reading, pending=True)
+    stale = dataclasses.replace(reported, reading=pending)
     assert burn.burn_document(stale, View())["quota_pending"] is True
     assert burn.burn_document(Snapshot(at=1.0), View())["quota_at"] is None
 

@@ -11,15 +11,15 @@ The endpoint reports percentages. It does not report a token allowance.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
+import pathlib
 import ssl
 import subprocess
 import time
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass, replace
-from pathlib import Path
 
 from .format import iso_epoch
 from .model import Quota, Reading, Spend
@@ -33,7 +33,7 @@ QUOTA_TIMEOUT = 4.0  # seconds; the live dashboard must not wait for the network
 # Each ``burn --once`` starts a new process. An in-process interval would not
 # limit requests across processes. The cache shares the interval and provides
 # the window shape for the first frame.
-CACHE = Path.home() / ".cache" / "burn" / "quota.json"
+CACHE = pathlib.Path.home() / ".cache" / "burn" / "quota.json"
 
 # Request interval. The cache carries it across processes. The lease stops
 # instances on the same interval from requesting together.
@@ -82,7 +82,9 @@ def _usable(stored: Reading | None) -> Reading | None:
     """Return current values, or the window shape if values are stale."""
     if stored is None:
         return None
-    return stored if time.time() - stored.at < QUOTA_STALE else replace(stored, pending=True)
+    if time.time() - stored.at < QUOTA_STALE:
+        return stored
+    return dataclasses.replace(stored, pending=True)
 
 
 def _recorded(answer: Response, stored: Reading | None, now: float) -> Reading | None:
@@ -100,7 +102,7 @@ def _recorded(answer: Response, stored: Reading | None, now: float) -> Reading |
 # -------------------------------------------------------------- request
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Response:
     """Result from one quota request."""
 
@@ -298,7 +300,7 @@ def _record(taken: Reading | None, retry_at: float = 0.0) -> dict:
         return {"at": None, "windows": [], "spend": None, "retry_at": retry_at}
     return {
         "at": taken.at,
-        "windows": [asdict(window) for window in taken.windows],
-        "spend": asdict(taken.spend) if taken.spend is not None else None,
+        "windows": [dataclasses.asdict(window) for window in taken.windows],
+        "spend": dataclasses.asdict(taken.spend) if taken.spend is not None else None,
         "retry_at": retry_at,
     }

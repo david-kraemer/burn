@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import datetime
 
 from rich.console import Group, RenderableType
 from rich.table import Table
@@ -72,7 +72,7 @@ def _masthead(snapshot: Snapshot, view: View, table: list[Row]) -> Text:
     active = sum(1 for row in table if snapshot.at - row.last <= IDLE)
     line = Text.assemble(
         ("burn", "bold"),
-        f"  {datetime.now(UTC).astimezone():%H:%M:%S}  ",
+        f"  {datetime.datetime.now(datetime.UTC).astimezone():%H:%M:%S}  ",
         ("up ", "dim"),
         seconds_span(snapshot.at - view.started),
         "   ",

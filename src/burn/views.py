@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from datetime import UTC, datetime
+import collections
+import datetime
 
 from rich.console import Group, RenderableType
 from rich.text import Text
@@ -65,7 +65,7 @@ def report_tools(snapshot: Snapshot, top: int = 15) -> RenderableType:
 
 def report_turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
     """Show the most expensive prompts."""
-    grouped: dict[tuple[str, str], list[Call]] = defaultdict(list)
+    grouped: dict[tuple[str, str], list[Call]] = collections.defaultdict(list)
     for call in snapshot.calls:
         if call.prompt:
             grouped[(call.session, call.prompt)].append(call)
@@ -83,7 +83,7 @@ def report_turns(snapshot: Snapshot, top: int = 15) -> RenderableType:
     for (session, prompt), items in ranked[:top]:
         cost = sum(analysis.call_dollars(c) for c in items)
         table.add_row(
-            f"{datetime.fromtimestamp(items[0].at, UTC).astimezone():%H:%M}",
+            f"{datetime.datetime.fromtimestamp(items[0].at, datetime.UTC).astimezone():%H:%M}",
             session,
             str(len(items)),
             Text(number_quantity(sum(c.weight for c in items)), style="bold"),
@@ -107,7 +107,7 @@ def report_session(snapshot: Snapshot, target: str | None) -> RenderableType:
     # Context belongs to the main thread; subagent requests have their own.
     own = [c for c in items if not c.sidechain] or items
     peak = max(c.prefix for c in own)
-    models: dict[str, float] = defaultdict(float)
+    models: dict[str, float] = collections.defaultdict(float)
     for call in items:
         models[model_label(call.model)] += call.weight
 
@@ -151,7 +151,7 @@ def report_cost(snapshot: Snapshot, window: int) -> RenderableType:
     for model, (rate, samples) in sorted(analysis.rates_solved().items()):
         table.add_row(model_label(model), f"{rate:.2f}", str(samples))
 
-    spent: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
+    spent: dict[tuple[str, str], list[float]] = collections.defaultdict(lambda: [0.0, 0.0])
     for call in snapshot.calls:
         entry = spent[(call.source, call.project)]
         entry[0] += call.weight

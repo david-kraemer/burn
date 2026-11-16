@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import collections
+import dataclasses
+import functools
+import itertools
 import json
 import os
+import pathlib
 import time
-from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
-from functools import cache
-from itertools import chain, pairwise
-from pathlib import Path
 
 from .format import id_short
 from .ingest import CLAUDE_ROOT, claude_usage, transcript_records
@@ -27,7 +27,7 @@ from .model import (
     calls_threads,
 )
 
-RATES_CACHE = Path.home() / ".cache" / "burn" / "rates.json"
+RATES_CACHE = pathlib.Path.home() / ".cache" / "burn" / "rates.json"
 RATES_TTL = 86400
 
 # A recreated cache token costs 1.25 units. A cache read costs 0.1.
@@ -39,7 +39,7 @@ IDLE_PREMIUM = CACHE_WRITE_WEIGHT - CACHE_READ_WEIGHT
 
 def calls_sessions(calls: Iterable[Call]) -> dict[str, list[Call]]:
     """Calls grouped by session, each group in time order."""
-    grouped: dict[str, list[Call]] = defaultdict(list)
+    grouped: dict[str, list[Call]] = collections.defaultdict(list)
     for call in calls:
         grouped[call.session].append(call)
     for group in grouped.values():
@@ -49,7 +49,7 @@ def calls_sessions(calls: Iterable[Call]) -> dict[str, list[Call]]:
 
 def snapshot_table(snapshot: Snapshot, needle: str = "") -> list[Row]:
     """Return one table row per session."""
-    groups: dict[tuple[str, str, str], list[Call]] = defaultdict(list)
+    groups: dict[tuple[str, str, str], list[Call]] = collections.defaultdict(list)
     for call in snapshot.calls:
         groups[(call.source, call.session, call.project)].append(call)
 
@@ -103,7 +103,7 @@ def calls_lanes(
 # ---------------------------------------------------------------- attribution
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Blame:
     """Context added by one tool and its later read cost."""
 
@@ -117,7 +117,7 @@ class Blame:
 PROMPT = "(prompt / system)"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Growth:
     """One thread's growth step, pending its tool assignment."""
 
@@ -131,7 +131,7 @@ class Growth:
 def calls_attribution(calls: Iterable[Call], tooling: Iterable[Tooling]) -> list[Blame]:
     """Assign context growth (calls minus output) and its later read cost to intervening tools."""
     events = _sessions_of(tooling)
-    totals: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])
+    totals: dict[str, list[float]] = collections.defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])
 
     for session, items in calls_sessions(calls).items():
         steps = list(_growths(items))
@@ -156,7 +156,7 @@ def _growths(items: Sequence[Call]) -> Iterator[Growth]:
     is matched to the thread it actually ran in, not every overlapping one.
     """
     for strand in calls_threads(items):
-        for index, (previous, call) in enumerate(pairwise(strand)):
+        for index, (previous, call) in enumerate(itertools.pairwise(strand)):
             # Cached once, read by each later call in this thread.
             carry = CACHE_WRITE_WEIGHT + CACHE_READ_WEIGHT * max(len(strand) - index - 2, 0)
             growth = call.prefix - previous.prefix - previous.usage.output
@@ -191,7 +191,7 @@ def _shares(between: Sequence[Tooling], growth: float) -> Iterator[tuple[str, fl
 
 def _sessions_of(tooling: Iterable[Tooling]) -> dict[str, list[Tooling]]:
     """Group tool results by session and sort them by time."""
-    grouped: dict[str, list[Tooling]] = defaultdict(list)
+    grouped: dict[str, list[Tooling]] = collections.defaultdict(list)
     for event in tooling:
         grouped[event.session].append(event)
     for group in grouped.values():
@@ -202,7 +202,7 @@ def _sessions_of(tooling: Iterable[Tooling]) -> dict[str, list[Tooling]]:
 # ----------------------------------------------------------------- cache waste
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Waste:
     """Cache recreation split into idle and normal churn."""
 
@@ -223,7 +223,7 @@ def calls_waste(calls: Iterable[Call], ttl: float) -> Waste:
     """Measure cache creation after gaps longer than the cache lifetime."""
     idle_tokens = idle_events = churn = 0
     for items in calls_sessions(calls).values():
-        for previous, call in pairwise(items):
+        for previous, call in itertools.pairwise(items):
             if not call.usage.cache_write:
                 continue
             if call.at - previous.at > ttl:
@@ -236,7 +236,7 @@ def calls_waste(calls: Iterable[Call], ttl: float) -> Waste:
 
 def calls_resumes(calls: Sequence[Call], ttl: float) -> int:
     """Count cache creations after idle gaps in one session."""
-    return sum(1 for a, b in pairwise(calls) if b.usage.cache_write and b.at - a.at > ttl)
+    return sum(1 for a, b in itertools.pairwise(calls) if b.usage.cache_write and b.at - a.at > ttl)
 
 
 # ------------------------------------------------------------------ the block
@@ -268,12 +268,12 @@ def rates_solved() -> Mapping[str, tuple[float, int]]:
     return _rates_within(int(time.time() // RATES_TTL))
 
 
-@cache
+@functools.cache
 def _rates_within(epoch: int) -> Mapping[str, tuple[float, int]]:
     """Solve rates, memoised per TTL-wide epoch so a live dashboard still sees cache refreshes."""
     if (cached := _cached_rates()) is not None:
         return cached
-    pools: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
+    pools: dict[str, list[float]] = collections.defaultdict(lambda: [0.0, 0.0, 0.0])
     for path in CLAUDE_ROOT.glob("*/*.jsonl"):
         observed, billed, fanout = _reconcile(path)
         if fanout or billed <= 0 or observed <= 0 or abs(billed - observed) / billed > 0.10:
@@ -331,7 +331,7 @@ def _save_rates(solved: Mapping[str, tuple[float, int]]) -> None:
 # ---------------------------------------------------------------- audit
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Reconciliation:
     """One closed session compared with Claude's billed total."""
 
@@ -356,7 +356,7 @@ def transcripts_audit() -> list[Reconciliation]:
     return found
 
 
-def _reconcile(path: Path) -> tuple[float, float, bool]:
+def _reconcile(path: pathlib.Path) -> tuple[float, float, bool]:
     """Return observed tokens, billed tokens, and fan-out status.
 
     The billed total covers the session's subagents, whose requests live in
@@ -365,7 +365,8 @@ def _reconcile(path: Path) -> tuple[float, float, bool]:
     billed = 0.0
     fanout = False
     observed: dict[str, float] = {}
-    for record in chain(transcript_records(path), *map(transcript_records, _subagents(path))):
+    files = [path, *_subagents(path)]
+    for record in itertools.chain.from_iterable(map(transcript_records, files)):
         if record.get("type") == "cost-state":
             billed = sum(w for _, w, _ in _cost_state(record))
             continue
@@ -386,12 +387,12 @@ def _reconcile(path: Path) -> tuple[float, float, bool]:
     return sum(observed.values()), billed, fanout
 
 
-def _subagents(path: Path) -> list[Path]:
+def _subagents(path: pathlib.Path) -> list[pathlib.Path]:
     """The subagent transcripts that belong to one main transcript."""
     return sorted(path.with_suffix("").glob("subagents/**/*.jsonl"))
 
 
-def _billed_models(path: Path) -> Iterator[tuple[str, float, float]]:
+def _billed_models(path: pathlib.Path) -> Iterator[tuple[str, float, float]]:
     """Per-model tokens/dollars from the final cost-state record; checkpoints replace, not add."""
     final = None
     for record in transcript_records(path):

@@ -22,9 +22,9 @@ Fields may be added; existing ones keep their names and meaning.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 from collections.abc import AsyncIterator
-from dataclasses import asdict
 
 from . import quota
 from .ingest import Tailer
@@ -86,11 +86,11 @@ def burn_document(snapshot: Snapshot, view: View) -> dict:
         "at": snapshot.at,
         "window_minutes": view.window,
         "source": view.source,
-        "quota": [asdict(window) for window in reading.windows] if reading else [],
+        "quota": [dataclasses.asdict(window) for window in reading.windows] if reading else [],
         "quota_at": reading.at if reading else None,
         # Pending values are older than quota.QUOTA_STALE and shown only for shape.
         "quota_pending": reading.pending if reading else False,
-        "spend": asdict(reading.spend) if reading and reading.spend else None,
-        "codex": [asdict(gauge) for gauge in snapshot.gauges],
-        "sessions": [asdict(row) for row in view_rows(view, snapshot)],
+        "spend": dataclasses.asdict(reading.spend) if reading and reading.spend else None,
+        "codex": [dataclasses.asdict(gauge) for gauge in snapshot.gauges],
+        "sessions": [dataclasses.asdict(row) for row in view_rows(view, snapshot)],
     }

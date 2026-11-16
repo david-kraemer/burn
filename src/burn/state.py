@@ -7,9 +7,9 @@ clamp or slide the cursor onto a neighbouring row.
 
 from __future__ import annotations
 
+import dataclasses
+import operator
 import time
-from dataclasses import dataclass, field
-from operator import attrgetter
 
 from .analysis import snapshot_table
 from .model import Row, Snapshot
@@ -34,7 +34,7 @@ MIN_WINDOW = 5
 MAX_WINDOW = 7 * 24 * 60
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class View:
     """State controlled by the keyboard."""
 
@@ -51,7 +51,7 @@ class View:
     panel: str = TOOLS
     mode: str = TABLE
     draft: str = ""
-    started: float = field(default_factory=time.time)
+    started: float = dataclasses.field(default_factory=time.time)
 
     @property
     def seconds(self) -> float:
@@ -62,7 +62,9 @@ def view_rows(view: View, snapshot: Snapshot) -> list[Row]:
     """The filtered and sorted table."""
     narrowed = snapshot.since(view.seconds).from_agent(view.source)
     return sorted(
-        snapshot_table(narrowed, view.needle), key=attrgetter(view.sort), reverse=view.reverse
+        snapshot_table(narrowed, view.needle),
+        key=operator.attrgetter(view.sort),
+        reverse=view.reverse,
     )
 
 

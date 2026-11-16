@@ -168,9 +168,9 @@ def test_the_viewport_keeps_the_cursor_inside_itself():
 
 
 def test_pending_window_shows_no_value(busy, snapshot):
-    from dataclasses import replace
+    import dataclasses
 
-    waiting = snapshot(calls=busy.calls, reading=replace(REPORTED, pending=True))
+    waiting = snapshot(calls=busy.calls, reading=dataclasses.replace(REPORTED, pending=True))
     frame = plain(snapshot_dashboard(waiting, View()))
     assert "Claude 5h" in frame, "draw the row before its value is known"
     assert "2.0%" not in frame and "$261.32" not in frame
@@ -187,9 +187,9 @@ def brackets(frame):
 
 def test_values_do_not_change_meter_positions(busy, snapshot):
     """Meter rows and columns stay fixed while values load."""
-    from dataclasses import replace
+    import dataclasses
 
-    pending = snapshot(calls=busy.calls, reading=replace(REPORTED, pending=True))
+    pending = snapshot(calls=busy.calls, reading=dataclasses.replace(REPORTED, pending=True))
     waiting = plain(snapshot_dashboard(pending, View()))
     arrived = plain(snapshot_dashboard(snapshot(calls=busy.calls, reading=REPORTED), View()))
     assert len(waiting.splitlines()) == len(arrived.splitlines())
@@ -198,9 +198,9 @@ def test_values_do_not_change_meter_positions(busy, snapshot):
 
 def test_pending_quota_does_not_use_local_estimate(busy, snapshot):
     """The pending quota keeps the meter layout fixed."""
-    from dataclasses import replace
+    import dataclasses
 
-    waiting = snapshot(calls=busy.calls, reading=replace(REPORTED, pending=True))
+    waiting = snapshot(calls=busy.calls, reading=dataclasses.replace(REPORTED, pending=True))
     assert "no --limit set" not in plain(snapshot_dashboard(waiting, View()))
 
 
@@ -209,9 +209,9 @@ def test_pending_quota_does_not_use_local_estimate(busy, snapshot):
 
 def local(*fields):
     """Epoch of a wall-clock time in the local zone."""
-    from datetime import datetime
+    import datetime
 
-    return datetime(*fields).timestamp()
+    return datetime.datetime(*fields).timestamp()
 
 
 def test_a_reset_later_today_is_a_bare_clock_reading():

@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
-from dataclasses import replace
 
 from .model import Row
 from .state import (
@@ -63,19 +63,19 @@ def key_apply(key: str, view: View, table: Sequence[Row]) -> View | None:
     if view.mode == FILTER:
         return _typing(key, view)
     if view.mode == HELP:
-        return replace(view, mode=TABLE)
+        return dataclasses.replace(view, mode=TABLE)
     return _command(key, view, table)
 
 
 def _typing(key: str, view: View) -> View:
     """Filter-entry state."""
     if key in ENTER:
-        return replace(view, needle=view.draft, mode=TABLE)
+        return dataclasses.replace(view, needle=view.draft, mode=TABLE)
     if key == ESCAPE:
-        return replace(view, draft="", mode=TABLE)
+        return dataclasses.replace(view, draft="", mode=TABLE)
     if key in BACKSPACE:
-        return replace(view, draft=view.draft[:-1])
-    return replace(view, draft=view.draft + key) if key.isprintable() else view
+        return dataclasses.replace(view, draft=view.draft[:-1])
+    return dataclasses.replace(view, draft=view.draft + key) if key.isprintable() else view
 
 
 def _command(key: str, view: View, table: Sequence[Row]) -> View | None:
@@ -84,31 +84,32 @@ def _command(key: str, view: View, table: Sequence[Row]) -> View | None:
         case k if k in QUIT:
             return None
         case "h" | "?":
-            return replace(view, mode=HELP)
+            return dataclasses.replace(view, mode=HELP)
         case " ":
-            return replace(view, paused=not view.paused)
+            return dataclasses.replace(view, paused=not view.paused)
         case k if k in DOWN:
-            return replace(view, selected=_step(view, table, +1))
+            return dataclasses.replace(view, selected=_step(view, table, +1))
         case k if k in UP:
-            return replace(view, selected=_step(view, table, -1))
+            return dataclasses.replace(view, selected=_step(view, table, -1))
         case k if k in ENTER:
-            return replace(view, zoomed=not view.zoomed, selected=_step(view, table, 0))
+            return dataclasses.replace(view, zoomed=not view.zoomed, selected=_step(view, table, 0))
         case "t":
-            return replace(view, panel=TURNS if view.panel == TOOLS else TOOLS)
+            return dataclasses.replace(view, panel=TURNS if view.panel == TOOLS else TOOLS)
         case "s" | "S":
-            return replace(view, sort=_cycle(view.sort, +1 if key == "s" else -1))
+            return dataclasses.replace(view, sort=_cycle(view.sort, +1 if key == "s" else -1))
         case "r":
-            return replace(view, reverse=not view.reverse)
+            return dataclasses.replace(view, reverse=not view.reverse)
         case "/":
-            return replace(view, mode=FILTER, draft=view.needle)
+            return dataclasses.replace(view, mode=FILTER, draft=view.needle)
         case "a":
-            return replace(view, source=AGENTS[(AGENTS.index(view.source) + 1) % len(AGENTS)])
+            following = AGENTS[(AGENTS.index(view.source) + 1) % len(AGENTS)]
+            return dataclasses.replace(view, source=following)
         case "+" | "=":
-            return replace(view, window=min(view.window * 2, MAX_WINDOW))
+            return dataclasses.replace(view, window=min(view.window * 2, MAX_WINDOW))
         case "-" | "_":
-            return replace(view, window=max(view.window // 2, MIN_WINDOW))
+            return dataclasses.replace(view, window=max(view.window // 2, MIN_WINDOW))
         case "c":
-            return replace(view, needle="", zoomed=False, source=None)
+            return dataclasses.replace(view, needle="", zoomed=False, source=None)
         case _:
             return view
 

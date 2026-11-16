@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import pathlib
 import time
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field, replace
-from pathlib import Path
 
 from . import quota
 from .format import id_short, iso_epoch
@@ -23,8 +23,8 @@ from .model import (
     Usage,
 )
 
-CLAUDE_ROOT = Path.home() / ".claude" / "projects"
-CODEX_ROOT = Path.home() / ".codex" / "sessions"
+CLAUDE_ROOT = pathlib.Path.home() / ".claude" / "projects"
+CODEX_ROOT = pathlib.Path.home() / ".codex" / "sessions"
 
 # Claude Code writes each subagent's conversation to its own file under the
 # parent session's directory (``<session>/subagents/[workflows/<id>/]agent-*``).
@@ -39,7 +39,7 @@ TREES = (
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Fragment:
     """Data parsed from one batch of appended lines."""
 
@@ -50,7 +50,7 @@ class Fragment:
     gauges_at: str = ""
 
 
-@dataclass(slots=True)
+@dataclasses.dataclass(slots=True)
 class Carry:
     """Parse state retained between reads of one file."""
 
@@ -58,7 +58,7 @@ class Carry:
     project: str = "?"
     model: str = "?"
     prompt: str = ""
-    pending: dict[str, str] = field(default_factory=dict)
+    pending: dict[str, str] = dataclasses.field(default_factory=dict)
     # Codex's running total at its last token_count event. Codex repeats the
     # event with an unchanged total; only a change is a new request.
     total: dict | None = None
@@ -68,8 +68,8 @@ class Tailer:
     """Incremental reader over both transcript trees."""
 
     def __init__(self, remote: bool = True) -> None:
-        self._offsets: dict[Path, int] = {}
-        self._carry: dict[Path, Carry] = {}
+        self._offsets: dict[pathlib.Path, int] = {}
+        self._carry: dict[pathlib.Path, Carry] = {}
         self._calls: dict[str, Call] = {}
         self._tools: list[Tooling] = []
         self._gauges: tuple[Gauge, ...] = ()
@@ -136,7 +136,7 @@ class Tailer:
         # does not prove that quota data is unknown.
         self._reading = task.result() or self._reading
 
-    def _read(self, horizon: float) -> list[tuple[Path, int, Fragment]]:
+    def _read(self, horizon: float) -> list[tuple[pathlib.Path, int, Fragment]]:
         found = []
         for path, source in _transcripts(horizon):
             stored = self._offsets.get(path, 0)
@@ -149,7 +149,7 @@ class Tailer:
                 found.append((path, offset, _parse(lines, source, self._carry_for(path, source))))
         return found
 
-    def _carry_for(self, path: Path, source: str) -> Carry:
+    def _carry_for(self, path: pathlib.Path, source: str) -> Carry:
         if path not in self._carry:
             seed = Carry(session=id_short(path.stem[-36:])) if source == CODEX else Carry()
             self._carry[path] = seed
@@ -161,7 +161,7 @@ class Tailer:
             self._calls[tag] = call if known is None else _merged(known, call)
         for tag in fragment.fanout:
             if (call := self._calls.get(tag)) and not call.fanout:
-                self._calls[tag] = replace(call, fanout=True)
+                self._calls[tag] = dataclasses.replace(call, fanout=True)
         self._tools.extend(fragment.tools)
         if fragment.gauges and fragment.gauges_at > self._gauges_at:
             self._gauges, self._gauges_at = fragment.gauges, fragment.gauges_at
@@ -206,7 +206,7 @@ def _read_claude(records: Iterable[dict], carry: Carry) -> Fragment:
                 at=at,
                 source=CLAUDE,
                 session=id_short(record.get("sessionId") or "?"),
-                project=Path(record.get("cwd") or "?").name,
+                project=pathlib.Path(record.get("cwd") or "?").name,
                 model=model,
                 usage=claude_usage(usage),
                 thinking=details.get("thinking_tokens") or 0,
@@ -231,7 +231,7 @@ def _merged(known: Call, later: Call) -> Call:
     In subagent transcripts the early records carry a partial output count;
     only the last one is final. Keep the first record's time and prompt.
     """
-    return replace(
+    return dataclasses.replace(
         later, at=known.at, prompt=known.prompt, fanout=known.fanout or later.fanout
     )
 
@@ -274,10 +274,10 @@ def _read_codex(records: Iterable[dict], carry: Carry) -> Fragment:
                 # Ignore session_id here: a sub-agent's rollout file reports
                 # its *parent's* thread id, which would corrupt attribution.
                 # _carry_for already seeded carry.session from the filename.
-                carry.project = Path(payload.get("cwd") or carry.project).name
+                carry.project = pathlib.Path(payload.get("cwd") or carry.project).name
             case "turn_context":
                 carry.model = payload.get("model") or carry.model
-                carry.project = Path(payload.get("cwd") or carry.project).name
+                carry.project = pathlib.Path(payload.get("cwd") or carry.project).name
             case "response_item":
                 tools.extend(_codex_results(payload, at, carry))
             case "event_msg":
@@ -370,7 +370,7 @@ def _blocks(message: dict) -> Iterator[dict]:
 # --------------------------------------------------------------------- files
 
 
-def _transcripts(horizon: float) -> list[tuple[Path, str]]:
+def _transcripts(horizon: float) -> list[tuple[pathlib.Path, str]]:
     """Return transcript files changed since ``horizon``."""
     found = []
     for root, source, pattern in TREES:
@@ -383,7 +383,7 @@ def _transcripts(horizon: float) -> list[tuple[Path, str]]:
     return found
 
 
-def _rewritten(path: Path, offset: int) -> bool:
+def _rewritten(path: pathlib.Path, offset: int) -> bool:
     """Whether ``path`` has shrunk below ``offset`` (rewritten or rotated)."""
     try:
         return path.stat().st_size < offset
@@ -391,7 +391,7 @@ def _rewritten(path: Path, offset: int) -> bool:
         return False
 
 
-def _tail(path: Path, offset: int) -> tuple[list[str], int]:
+def _tail(path: pathlib.Path, offset: int) -> tuple[list[str], int]:
     """Read complete lines after ``offset`` and return the new offset."""
     try:
         size = path.stat().st_size
@@ -415,7 +415,7 @@ def _tail(path: Path, offset: int) -> tuple[list[str], int]:
     return blob[:end].decode("utf-8", "replace").split("\n"), offset + end + 1
 
 
-def transcript_records(path: Path) -> Iterator[dict]:
+def transcript_records(path: pathlib.Path) -> Iterator[dict]:
     """Yield every record in a file."""
     try:
         with path.open(errors="replace") as handle:

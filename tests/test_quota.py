@@ -1,13 +1,13 @@
 """Parse Claude quota data. Do not estimate missing values."""
 
 import contextlib
+import dataclasses
 import io
 import json
 import subprocess
 import sys
 import time
 import urllib.error
-from dataclasses import replace
 
 import pytest
 
@@ -240,7 +240,7 @@ def test_stale_reading_keeps_windows_but_not_values(
     unread = quota.quota_reading()
     assert unread.pending
     assert unread.windows == taken.windows
-    assert replace(unread, pending=False) == taken
+    assert dataclasses.replace(unread, pending=False) == taken
 
 
 def test_corrupt_cache_returns_no_reading(polled):

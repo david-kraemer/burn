@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
+import itertools
 import re
-from datetime import UTC, datetime
-from itertools import pairwise
 
 SPARK = "▁▂▃▄▅▆▇█"
 
@@ -40,7 +40,7 @@ def _clock(epoch: float | None) -> str:
     """Format a Unix timestamp as a local time carrying its meridiem and zone."""
     if epoch is None:
         return "?"
-    local = datetime.fromtimestamp(epoch, UTC).astimezone()
+    local = datetime.datetime.fromtimestamp(epoch, datetime.UTC).astimezone()
     # %I is zero-padded and has no portable unpadded form, and 01-12 never
     # strips away to nothing.
     return f"{local:%I:%M%p %Z}".lstrip("0")
@@ -54,8 +54,8 @@ def epoch_deadline(epoch: float | None, now: float) -> str:
     """
     if epoch is None:
         return "?"
-    local = datetime.fromtimestamp(epoch, UTC).astimezone()
-    if local.date() == datetime.fromtimestamp(now, UTC).astimezone().date():
+    local = datetime.datetime.fromtimestamp(epoch, datetime.UTC).astimezone()
+    if local.date() == datetime.datetime.fromtimestamp(now, datetime.UTC).astimezone().date():
         return _clock(epoch)
     dated = f"{local:%a %b} {local.day} {_clock(epoch)}"
     return f"{dated} (in {seconds_span(epoch - now)})" if epoch > now else dated
@@ -66,7 +66,7 @@ def iso_epoch(text: str | None) -> float | None:
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text).timestamp()
+        return datetime.datetime.fromisoformat(text).timestamp()
     except ValueError:
         return None
 
@@ -116,4 +116,7 @@ def series_resample(series: list[float], width: int) -> list[float]:
     # Last edge is len(series), not round(width * step), to avoid dropping
     # the series' final point to float drift.
     edges = [round(i * step) for i in range(width)] + [len(series)]
-    return [sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1) for lo, hi in pairwise(edges)]
+    return [
+        sum(series[lo : max(hi, lo + 1)]) / max(hi - lo, 1)
+        for lo, hi in itertools.pairwise(edges)
+    ]

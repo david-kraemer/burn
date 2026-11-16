@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import contextlib
 import os
 import sys
 import termios
 import time
 import tty
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
 from rich.console import Console
 from rich.live import Live
@@ -88,7 +88,7 @@ async def console_monitor(console: Console, view: View, remote: bool = True) -> 
                         task.cancel()
 
 
-@asynccontextmanager
+@contextlib.asynccontextmanager
 async def _keyboard() -> AsyncIterator[asyncio.Queue[str]]:
     """Return queued keypresses, or none when stdin is not a terminal."""
     queue: asyncio.Queue[str] = asyncio.Queue()

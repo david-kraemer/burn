@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
+import itertools
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass, field, replace
-from itertools import pairwise
 
 # Weights are relative to one input token; raw sums overstate cost.
 CACHE_WRITE_WEIGHT = 1.25
@@ -21,7 +21,7 @@ CODEX = "cx"
 FANOUT_TOOLS = frozenset({"Task", "Agent", "Workflow"})
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Usage:
     """One request's four billed token classes."""
 
@@ -53,7 +53,7 @@ class Usage:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Call:
     """One API request from either agent."""
 
@@ -79,7 +79,7 @@ class Call:
         return self.usage.weight
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Tooling:
     """A tool result returned to a conversation."""
 
@@ -89,7 +89,7 @@ class Tooling:
     size: int
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Gauge:
     """A quota window reported by Codex."""
 
@@ -98,7 +98,7 @@ class Gauge:
     resets_at: float | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Quota:
     """Quota window for the signed-in Anthropic account."""
 
@@ -110,7 +110,7 @@ class Quota:
     active: bool = False  # True when this window controls the account.
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Spend:
     """Extra-usage credits used against a cap. Values use major currency units."""
 
@@ -122,7 +122,7 @@ class Spend:
         return 100 * self.used / self.cap if self.cap else 0.0
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Reading:
     """Reported quota data, or its window shape while values are pending."""
 
@@ -133,11 +133,11 @@ class Reading:
     pending: bool = False
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Snapshot:
     """Data read from disk at one point in time."""
 
-    at: float = field(default_factory=time.time)
+    at: float = dataclasses.field(default_factory=time.time)
     calls: tuple[Call, ...] = ()
     tools: tuple[Tooling, ...] = ()
     gauges: tuple[Gauge, ...] = ()
@@ -146,7 +146,7 @@ class Snapshot:
     def since(self, seconds: float) -> Snapshot:
         """Return data from the last ``seconds``."""
         cutoff = self.at - seconds
-        return replace(
+        return dataclasses.replace(
             self,
             calls=tuple(c for c in self.calls if c.at >= cutoff),
             tools=tuple(t for t in self.tools if t.at >= cutoff),
@@ -157,14 +157,14 @@ class Snapshot:
         if source is None:
             return self
         sessions = {c.session for c in self.calls if c.source == source}
-        return replace(
+        return dataclasses.replace(
             self,
             calls=tuple(c for c in self.calls if c.source == source),
             tools=tuple(t for t in self.tools if t.session in sessions),
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Row:
     """One session summarized for the table."""
 
@@ -191,7 +191,7 @@ class Row:
 
 def calls_compactions(calls: Iterable[Call]) -> int:
     """Count context compactions."""
-    return sum(1 for a, b in pairwise(calls) if b.prefix < a.prefix * 0.7)
+    return sum(1 for a, b in itertools.pairwise(calls) if b.prefix < a.prefix * 0.7)
 
 
 def calls_threads(calls: Iterable[Call]) -> list[list[Call]]:
